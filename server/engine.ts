@@ -1,4 +1,4 @@
-// ─── SILNIK GRY — pełne zasady ───────────────────────────────────────────────
+// ─── SILNIK GRY — pełne zasady (poprawione) ─────────────────────────────────
 
 import { BOARD } from '../shared/board'
 import { CARDS_CHEST, CARDS_CHANCE, type CardDef } from '../shared/cards'
@@ -26,17 +26,42 @@ function shuffle<T>(arr: T[]): T[] {
 
 export interface GameSettings {
   startMoney: number
+  freeParking: boolean       // true = darmowy parking zbiera podatki/kary
+  auctionEnabled: boolean    // false = brak licytacji
+  goSalary: number           // pensja za przejście przez START
+}
+
+const DEFAULT_SETTINGS: GameSettings = {
+  startMoney: 1500,
+  freeParking: false,
+  auctionEnabled: true,
+  goSalary: 200
+}
+
+export interface GameStatistics {
+  rentCollected: Record<string, number>      // playerId -> łączny czynsz zebrany
+  rentPaid: Record<string, number>           // playerId -> łączny czynsz zapłacony
+  propertiesBought: Record<string, number>   // playerId -> ile nieruchomości kupionych
+  housesBuilt: Record<string, number>        // playerId -> ile domków zbudowanych
+  tradesCompleted: number                    // łączna liczba transakcji
+  totalMoneyTransferred: number              // łączna suma przepływów pieniężnych
+  turnsPlayed: number                        // liczba zakończonych tur
 }
 
 export class Game {
   state: GameState
+  settings: GameSettings
+  statistics: GameStatistics
   private logSeq = 0
   private chatSeq = 0
   private cardSeq = 0
   private chanceDeck: number[] = []
   private chestDeck: number[] = []
+  private lastActionTime = 0
+  private pendingActions = new Set<string>()
 
-  constructor(settings: GameSettings) {
+  constructor(settings: Partial<GameSettings> = {}) {
+    this.settings = { ...DEFAULT_SETTINGS, ...settings }
     this.state = {
       phase: 'lobby',
       players: [],
@@ -50,10 +75,21 @@ export class Game {
       auction: null,
       trade: null,
       log: [],
-      lastCard: null,
       chat: [],
+      lastCard: null,
       winner: null,
-      startMoney: settings.startMoney
+      startMoney: this.settings.startMoney,
+      settings: this.settings,
+      finalStats: null
+    }
+    this.statistics = {
+      rentCollected: {},
+      rentPaid: {},
+      propertiesBought: {},
+      housesBuilt: {},
+      tradesCompleted: 0,
+      totalMoneyTransferred: 0,
+      turnsPlayed: 0
     }
     for (let i = 0; i < BOARD.length; i++) {
       this.state.properties[i] = { owner: null, houses: 0, mortgaged: false }
@@ -81,11 +117,26 @@ export class Game {
 
   private isCurrent(id: string): boolean {
     return this.current()?.id === id && this.state.phase === 'playing' &&
-      !this.state.trade // podczas oczekiwania na odpowiedź na handel nikt nie gra
+      !this.state.trade
   }
 
   private blockedByTrade(): boolean {
     return this.state.trade != null
+  }
+
+  /** Bezpieczny transfer pieniędzy z walidacją */
+  private transferMoney(fromId: string, amount: number, toId: string | null): boolean {
+    if (amount <= 0) return true
+    const from = this.player(fromId)
+    if (!from || from.bankrupt) return false
+    if (from.money < amount) return false
+    from.money -= amount
+    if (toId) {
+      const to = this.player(toId)
+      if (to && !to.bankrupt) to.money += amount
+    }
+    this.statistics.totalMoneyTransferred += amount
+    return true
   }
 
   addPlayer(id: string, name: string) {
@@ -122,6 +173,49 @@ export class Game {
     const idx = this.state.players.findIndex((p) => p.id === id)
     if (idx === -1) return
     this.state.players.splice(idx, 1)
+  }
+
+  /** Zwraca podsumowanie statystyk na koniec gry */
+  getFinalStatistics() {
+    const stats = this.statistics
+    const players = this.state.players.map(p => {
+      let netWorth = p.money
+      let propertyCount = 0
+      let totalHouses = 0
+      let totalHotels = 0
+      for (const t of BOARD) {
+        const prop = this.state.properties[t.id]
+        if (prop.owner === p.id) {
+          propertyCount++
+          if (t.price) netWorth += t.price
+          if (prop.mortgaged && t.price) netWorth += Math.floor(t.price / 2)
+          if (prop.houses === 5) totalHotels++
+          else totalHouses += prop.houses
+          if (t.houseCost) netWorth += prop.houses * t.houseCost
+        }
+      }
+      return {
+        id: p.id,
+        name: p.name,
+        color: p.color,
+        money: p.money,
+        netWorth,
+        propertyCount,
+        totalHouses,
+        totalHotels,
+        rentCollected: stats.rentCollected[p.id] ?? 0,
+        rentPaid: stats.rentPaid[p.id] ?? 0,
+        propertiesBought: stats.propertiesBought[p.id] ?? 0,
+        housesBuilt: stats.housesBuilt[p.id] ?? 0,
+        bankrupt: p.bankrupt
+      }
+    })
+    return {
+      players: players.sort((a, b) => b.netWorth - a.netWorth),
+      tradesCompleted: stats.tradesCompleted,
+      totalMoneyTransferred: stats.totalMoneyTransferred,
+      turnsPlayed: stats.turnsPlayed
+    }
   }
 
   // ── Główna obsługa akcji ───────────────────────────────────────────────────
@@ -197,18 +291,19 @@ export class Game {
   private moveAndLand(p: Player, steps: number, isDoubles: boolean) {
     const old = p.position
     p.position = ((old + steps) % 40 + 40) % 40
-    if (steps > 0 && p.position < old) {
-      p.money += GO_SALARY
-      this.log(`${p.name} przechodzi przez START (+${GO_SALARY})`, 'money')
+    if (steps > 0 && p.position <= old) {
+      // Przeszedł przez START (pozycja <= old oznacza, że minął 0)
+      p.money += this.settings.goSalary
+      this.log(`${p.name} przechodzi przez START (+${this.settings.goSalary})`, 'money')
     }
     this.state.extraRoll = isDoubles
     this.resolveLanding()
   }
 
   private moveTo(p: Player, target: number) {
-    if (target !== 0 && target < p.position) {
-      p.money += GO_SALARY
-      this.log(`${p.name} przechodzi przez START (+${GO_SALARY})`, 'money')
+    if (target !== 0 && (target < p.position || (target === 0 && p.position !== 0))) {
+      p.money += this.settings.goSalary
+      this.log(`${p.name} przechodzi przez START (+${this.settings.goSalary})`, 'money')
     }
     p.position = target
     this.resolveLanding()
@@ -238,8 +333,14 @@ export class Game {
         } else if (prop.owner !== p.id && !prop.mortgaged) {
           const diceSum = (this.state.dice?.[0] ?? 0) + (this.state.dice?.[1] ?? 0)
           const rent = calcRent(tile, this.state, diceSum) ?? 0
-          this.log(`${p.name} płaci ${rent} czynszu graczowi ${this.player(prop.owner)?.name}`, 'money')
+          const owner = this.player(prop.owner)
+          this.log(`${p.name} płaci ${rent} czynszu graczowi ${owner?.name}`, 'money')
           this.pay(p.id, rent, prop.owner)
+          // Statystyki czynszu
+          if (!this.statistics.rentCollected[prop.owner]) this.statistics.rentCollected[prop.owner] = 0
+          if (!this.statistics.rentPaid[p.id]) this.statistics.rentPaid[p.id] = 0
+          this.statistics.rentCollected[prop.owner] += rent
+          this.statistics.rentPaid[p.id] += rent
           this.finishStep()
         } else {
           if (prop.mortgaged && prop.owner !== p.id) {
@@ -252,6 +353,11 @@ export class Game {
       case 'tax': {
         this.log(`${p.name} płaci podatek ${tile.taxAmount}`, 'money')
         this.pay(p.id, tile.taxAmount!, null)
+        // Jeśli darmowy parking — pieniądze idą na pole 20
+        if (this.settings.freeParking) {
+          const parkingProp = this.state.properties[20]
+          if (!parkingProp) this.state.properties[20] = { owner: '__parking_pool__', houses: 0, mortgaged: false }
+        }
         this.finishStep()
         break
       }
@@ -266,6 +372,19 @@ export class Game {
         this.drawCard(tile.type)
         break
       }
+      case 'parking': {
+        // Darmowy parking - zbierz pulę jeśli freeParking włączony
+        if (this.settings.freeParking) {
+          const pool = this.getFreeParkingPool()
+          if (pool > 0) {
+            p.money += pool
+            this.log(`${p.name} zbiera ${pool} zł z darmowego parkingu!`, 'money')
+            this.clearFreeParkingPool()
+          }
+        }
+        this.finishStep()
+        break
+      }
       default:
         this.finishStep()
     }
@@ -273,6 +392,26 @@ export class Game {
 
   private finishStep() {
     this.state.awaiting = this.state.extraRoll ? 'roll' : 'end'
+  }
+
+  // ── Darmowy Parking ──────────────────────────────────────────────────────
+
+  private getFreeParkingPool(): number {
+    // Prosta implementacja: pulę trzymamy w properties[20].houses jako licznik
+    return this.state.properties[20]?.houses ?? 0
+  }
+
+  private addToFreeParkingPool(amount: number) {
+    if (!this.state.properties[20]) {
+      this.state.properties[20] = { owner: '__parking_pool__', houses: 0, mortgaged: false }
+    }
+    this.state.properties[20].houses += amount
+  }
+
+  private clearFreeParkingPool() {
+    if (this.state.properties[20]) {
+      this.state.properties[20].houses = 0
+    }
   }
 
   // ── Karty ──────────────────────────────────────────────────────────────────
@@ -318,9 +457,18 @@ export class Game {
       case 'move-abs':
         this.moveTo(p, e.target)
         break
-      case 'move-rel':
-        this.moveAndLand(p, e.delta, false)
+      case 'move-rel': {
+        // POPRAWKA: prawidłowe cofanie się z owijaniem
+        const newPos = ((p.position + e.delta) % 40 + 40) % 40
+        if (e.delta < 0 && newPos > p.position) {
+          // Przeszedł przez START cofając się (nie powinno się zdarzyć)
+          p.money += this.settings.goSalary
+          this.log(`${p.name} przechodzi przez START (+${this.settings.goSalary})`, 'money')
+        }
+        p.position = newPos
+        this.resolveLanding()
         break
+      }
       case 'jail':
         this.goToJail(p)
         this.state.awaiting = 'end'
@@ -351,8 +499,7 @@ export class Game {
 
   // ── Płatności i bankructwo ────────────────────────────────────────────────
 
-  /** Próbuje pobrać kwotę. Jeśli brak środków — automatyczna likwidacja majątku.
-   *  Zwraca true, jeśli zapłacono. */
+  /** Próbuje pobrać kwotę. Jeśli brak środków — automatyczna likwidacja majątku. */
   private pay(fromId: string, amount: number, toId: string | null): boolean {
     if (amount <= 0) return true
     let p = this.player(fromId)!
@@ -385,11 +532,9 @@ export class Game {
         const prop = this.state.properties[i]
         if (prop.owner === p.id) {
           prop.owner = creditor.id
-          // przejmowane nieruchomości pozostają z hipoteką
         }
       }
     } else {
-      // majątek wraca do banku
       for (let i = 0; i < BOARD.length; i++) {
         const prop = this.state.properties[i]
         if (prop.owner === p.id) { prop.owner = null; prop.houses = 0; prop.mortgaged = false }
@@ -437,6 +582,8 @@ export class Game {
       this.state.awaiting = 'over'
       this.state.winner = alive[0]?.id ?? null
       if (alive[0]) this.log(`🏆 ${alive[0].name} wygrywa grę!`, 'big')
+      // Zapisz statystyki końcowe
+      this.state.finalStats = this.getFinalStatistics() as any
     }
   }
 
@@ -451,6 +598,9 @@ export class Game {
     p.money -= tile.price!
     this.state.properties[tile.id].owner = p.id
     this.log(`${p.name} kupuje ${tile.name} za ${tile.price}`, 'money')
+    // Statystyki
+    if (!this.statistics.propertiesBought[p.id]) this.statistics.propertiesBought[p.id] = 0
+    this.statistics.propertiesBought[p.id]++
     this.state.pendingTile = null
     this.finishStep()
   }
@@ -458,12 +608,17 @@ export class Game {
   private declineBuy(playerId: string) {
     if (!this.isCurrent(playerId) || this.blockedByTrade()) return
     if (this.state.awaiting !== 'buy') return
-    this.startAuction(this.state.pendingTile!)
+    if (this.settings.auctionEnabled) {
+      this.startAuction(this.state.pendingTile!)
+    } else {
+      this.log(`${this.current()?.name} rezygnuje z zakupu ${BOARD[this.state.pendingTile!].name}.`)
+      this.state.pendingTile = null
+      this.finishStep()
+    }
   }
 
   private startAuction(tileId: number) {
     const order = this.activePlayers().map((p) => p.id)
-    // licytację zaczyna gracz po aktualnym
     const curPos = order.indexOf(this.current()!.id)
     const participants = [...order.slice(curPos + 1), ...order.slice(0, curPos + 1)]
     this.state.auction = { tileId, participants, turnIdx: 0, bid: 0, winner: null, passed: [] }
@@ -503,6 +658,8 @@ export class Game {
         winner.money -= a.bid
         this.state.properties[a.tileId].owner = last
         this.log(`🔨 ${winner.name} wygrywa licytację ${BOARD[a.tileId].name} za ${a.bid}`, 'money')
+        if (!this.statistics.propertiesBought[last]) this.statistics.propertiesBought[last] = 0
+        this.statistics.propertiesBought[last]++
       } else {
         this.log(`🔨 Nikt nie kupił ${BOARD[a.tileId].name} na licytacji.`)
       }
@@ -510,7 +667,6 @@ export class Game {
       this.finishStep()
       return
     }
-    // następny uczestnik, który nie spasował
     do {
       a.turnIdx = (a.turnIdx + 1) % a.participants.length
     } while (a.passed.includes(a.participants[a.turnIdx]))
@@ -547,6 +703,7 @@ export class Game {
     this.state.doublesCount = 0
     this.state.extraRoll = false
     this.state.dice = null
+    this.statistics.turnsPlayed++
 
     const n = this.state.players.length
     let idx = this.state.currentIdx
@@ -563,7 +720,7 @@ export class Game {
   private canActOnProperty(playerId: string, tileId: number): boolean {
     const p = this.player(playerId)
     if (!p || p.bankrupt || this.blockedByTrade()) return false
-    if (playerId !== this.current()?.id) return false           // zarządzanie tylko w swojej turze
+    if (playerId !== this.current()?.id) return false
     if (!['roll', 'end'].includes(this.state.awaiting)) return false
     const prop = this.state.properties[tileId]
     return !!prop && prop.owner === playerId
@@ -576,20 +733,20 @@ export class Game {
     if (tile.type !== 'street' || !tile.group || !tile.houseCost) return
     const group = tile.group
     if (!ownsWholeGroup(this.state, group, playerId)) return
-    if (!groupHasNoBuildings(this.state, group) === false) { /* noop */ }
     const prop = this.state.properties[tileId]
     if (prop.mortgaged) return
-    // cała grupa musi być wolna od hipotek
     for (const t of BOARD.filter((x) => x.group === group)) {
       if (this.state.properties[t.id].mortgaged) return
     }
-    if (minHousesInGroup(this.state, group) < prop.houses) return  // równomierna zabudowa
+    if (minHousesInGroup(this.state, group) < prop.houses) return
     if (prop.houses >= 5) return
     if (p.money < tile.houseCost) return
     p.money -= tile.houseCost
     prop.houses++
     const label = prop.houses === 5 ? 'hotel 🏨' : `domek 🏠 (${prop.houses})`
     this.log(`🏗️ ${p.name} buduje ${label} przy ${tile.name} (-${tile.houseCost})`, 'money')
+    if (!this.statistics.housesBuilt[p.id]) this.statistics.housesBuilt[p.id] = 0
+    this.statistics.housesBuilt[p.id]++
   }
 
   private sellHouse(playerId: string, tileId: number) {
@@ -599,7 +756,7 @@ export class Game {
     if (tile.type !== 'street' || !tile.group || !tile.houseCost) return
     const prop = this.state.properties[tileId]
     if (prop.houses === 0) return
-    if (maxHousesInGroup(this.state, tile.group) > prop.houses) return  // równomierna zabudowa w dół
+    if (maxHousesInGroup(this.state, tile.group) > prop.houses) return
     prop.houses--
     p.money += Math.floor(tile.houseCost / 2)
     this.log(`🔧 ${p.name} sprzedaje budynek przy ${tile.name} (+${Math.floor(tile.houseCost / 2)})`, 'money')
@@ -639,7 +796,6 @@ export class Game {
     const to = this.player(action.to)
     if (!from || !to || to.bankrupt || from.bankrupt) return
     if (from.id === to.id) return
-    // walidacja własności
     for (const tid of action.give.properties) {
       if (this.state.properties[tid]?.owner !== from.id) return
     }
@@ -658,11 +814,10 @@ export class Game {
     const giver = this.player(trade.from)
     const receiver = this.player(trade.to)
     if (!accept || !giver || !receiver || giver.bankrupt || receiver.bankrupt) {
-      this.log(accept ? '' : `❌ ${receiver?.name} odrzuca propozycję handlu.`.trim())
+      if (!accept) this.log(`❌ ${receiver?.name} odrzuca propozycję handlu.`)
       this.state.trade = null
       return
     }
-    // ponowna walidacja przed wykonaniem
     for (const tid of trade.give.properties) {
       if (this.state.properties[tid]?.owner !== giver.id) { this.state.trade = null; return }
     }
@@ -673,7 +828,6 @@ export class Game {
       this.state.trade = null
       return
     }
-    // wykonanie wymiany
     giver.money -= trade.give.cash
     receiver.money += trade.give.cash
     receiver.money -= trade.get.cash
@@ -681,6 +835,7 @@ export class Game {
     for (const tid of trade.give.properties) this.state.properties[tid].owner = receiver.id
     for (const tid of trade.get.properties) this.state.properties[tid].owner = giver.id
     this.log(`✅ Handel zawarty między ${giver.name} i ${receiver.name}!`, 'big')
+    this.statistics.tradesCompleted++
     this.state.trade = null
   }
 
@@ -713,4 +868,3 @@ function maxHousesInGroup(state: GameState, group: string): number {
   const tiles = BOARD.filter((t) => t.group === group)
   return Math.max(...tiles.map((t) => state.properties[t.id]?.houses ?? 0))
 }
-

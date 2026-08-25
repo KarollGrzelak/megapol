@@ -20,7 +20,7 @@ class Room {
   code: string
   hostId: string
   players = new Map<string, RoomPlayer>() // playerId -> player
-  settings = { startMoney: 1500 }
+  settings = { startMoney: 1500, freeParking: false, auctionEnabled: true, goSalary: 200 }
   game: Game | null = null
 
   constructor(code: string, hostId: string) {
@@ -121,6 +121,21 @@ io.on('connection', (socket) => {
 
   // ── Ustawienia lobby ────────────────────────────────────────────────────
 
+  socket.on('room:settings', ({ code, settings }: { code: string; settings: { startMoney?: number; freeParking?: boolean; auctionEnabled?: boolean; goSalary?: number } }) => {
+    const room = rooms.get(String(code || '').toUpperCase())
+    if (!room || room.game || socket.data.playerId !== room?.hostId) return
+    if (settings.startMoney !== undefined) {
+      room.settings.startMoney = Math.max(500, Math.min(5000, Math.round(Number(settings.startMoney) || 1500)))
+    }
+    if (settings.freeParking !== undefined) room.settings.freeParking = !!settings.freeParking
+    if (settings.auctionEnabled !== undefined) room.settings.auctionEnabled = !!settings.auctionEnabled
+    if (settings.goSalary !== undefined) {
+      room.settings.goSalary = Math.max(100, Math.min(500, Math.round(Number(settings.goSalary) || 200)))
+    }
+    broadcast(room)
+  })
+
+  // Kompatybilność wsteczna
   socket.on('room:start-money', ({ code, amount }: { code: string; amount: number }) => {
     const room = rooms.get(String(code || '').toUpperCase())
     if (!room || room.game || socket.data.playerId !== room?.hostId) return
@@ -133,7 +148,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(String(code || '').toUpperCase())
     if (!room || room.game || socket.data.playerId !== room?.hostId) return
     try {
-      const game = new Game({ startMoney: room.settings.startMoney })
+      const game = new Game(room.settings)
       for (const p of room.players.values()) game.addPlayer(p.id, p.name)
       game.start()
       room.game = game

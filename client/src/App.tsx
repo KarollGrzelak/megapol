@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { socket, getPlayerId } from './socket'
 import type { RoomView } from '../../shared/types'
 import GameScreen from './components/GameScreen'
+import { ToastProvider, useToast } from './components/Toast'
 
 const myId = getPlayerId()
 
@@ -15,21 +16,24 @@ export function useRoom(): RoomView | null {
   return room
 }
 
-export default function App() {
+function AppInner() {
   const room = useRoom()
   const [name, setName] = useState(() => localStorage.getItem('megapol-name') || '')
   const [joinCode, setJoinCode] = useState(
     () => new URLSearchParams(window.location.search).get('room')?.toUpperCase() || ''
   )
   const [error, setError] = useState('')
+  const { addToast } = useToast()
 
   useEffect(() => {
-    const onError = ({ message }: { message: string }) => setError(message)
+    const onError = ({ message }: { message: string }) => {
+      setError(message)
+      addToast(message, 'error')
+    }
     socket.on('error-msg', onError)
     return () => { socket.off('error-msg', onError) }
-  }, [])
+  }, [addToast])
 
-  // automatyczne połączenie przy wejściu z linku ?room=KOD
   useEffect(() => {
     if (!socket.connected) socket.connect()
     return () => { /* zostajemy połączeni */ }
@@ -53,8 +57,8 @@ export default function App() {
     return (
       <div className="screen home">
         <div className="card">
-          <h1 className="logo">MEGA<span>POL</span> 🎲</h1>
-          <p className="subtitle">Twój własny monopol online — za darmo</p>
+          <h1 className="logo">MEGA<span>POL</span></h1>
+          <p className="subtitle">Monopol online — za darmo, z przyjaciółmi</p>
           <input
             className="input"
             placeholder="Twój nick"
@@ -91,7 +95,10 @@ export default function App() {
           <div className="room-code" title="Podaj znajomym ten kod">{room.code}</div>
           <button
             className="btn ghost small"
-            onClick={() => navigator.clipboard?.writeText(link)}
+            onClick={() => {
+              navigator.clipboard?.writeText(link)
+              addToast('Link skopiowany!', 'success')
+            }}
           >
             🔗 Kopiuj link zaproszenia
           </button>
@@ -102,20 +109,57 @@ export default function App() {
               </span>
             ))}
           </div>
-          {isHost ? (
+          {isHost && (
             <>
-              <label className="label">Startowa gotówka</label>
-              <select
-                className="input"
-                value={room.settings.startMoney}
-                onChange={(e) =>
-                  socket.emit('room:start-money', { code: room.code, amount: Number(e.target.value) })
-                }
-              >
-                {[1000, 1500, 2000, 2500].map((v) => (
-                  <option key={v} value={v}>{v} zł</option>
-                ))}
-              </select>
+              <div className="lobby-settings">
+                <label className="label">Startowa gotówka</label>
+                <select
+                  className="input"
+                  value={room.settings.startMoney}
+                  onChange={(e) =>
+                    socket.emit('room:settings', { code: room.code, settings: { startMoney: Number(e.target.value) } })
+                  }
+                >
+                  {[500, 1000, 1500, 2000, 2500, 3000, 5000].map((v) => (
+                    <option key={v} value={v}>{v} zł</option>
+                  ))}
+                </select>
+
+                <label className="label">Pensja za START</label>
+                <select
+                  className="input"
+                  value={room.settings.goSalary}
+                  onChange={(e) =>
+                    socket.emit('room:settings', { code: room.code, settings: { goSalary: Number(e.target.value) } })
+                  }
+                >
+                  {[100, 200, 300, 400, 500].map((v) => (
+                    <option key={v} value={v}>{v} zł</option>
+                  ))}
+                </select>
+
+                <label className="check setting-check">
+                  <input
+                    type="checkbox"
+                    checked={room.settings.auctionEnabled}
+                    onChange={(e) =>
+                      socket.emit('room:settings', { code: room.code, settings: { auctionEnabled: e.target.checked } })
+                    }
+                  />
+                  Licytacje włączone
+                </label>
+
+                <label className="check setting-check">
+                  <input
+                    type="checkbox"
+                    checked={room.settings.freeParking}
+                    onChange={(e) =>
+                      socket.emit('room:settings', { code: room.code, settings: { freeParking: e.target.checked } })
+                    }
+                  />
+                  Darmowy Parking zbiera pieniądze
+                </label>
+              </div>
               <button
                 className="btn primary big"
                 disabled={room.players.length < 2}
@@ -124,7 +168,8 @@ export default function App() {
                 {room.players.length < 2 ? 'Czekam na graczy (min. 2)…' : 'Rozpocznij grę!'}
               </button>
             </>
-          ) : (
+          )}
+          {!isHost && (
             <p className="subtitle">Czekaj, aż gospodarz rozpocznie grę…</p>
           )}
           {error && <p className="error">{error}</p>}
@@ -134,4 +179,12 @@ export default function App() {
   }
 
   return <GameScreen room={room} myId={myId} />
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <AppInner />
+    </ToastProvider>
+  )
 }

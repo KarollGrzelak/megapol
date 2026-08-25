@@ -78,6 +78,34 @@ export interface LastCard {
   playerName: string
 }
 
+export interface GameSettings {
+  startMoney: number
+  freeParking: boolean
+  auctionEnabled: boolean
+  goSalary: number
+}
+
+export interface FinalStatistics {
+  players: Array<{
+    id: string
+    name: string
+    color: string
+    money: number
+    netWorth: number
+    propertyCount: number
+    totalHouses: number
+    totalHotels: number
+    rentCollected: number
+    rentPaid: number
+    propertiesBought: number
+    housesBuilt: number
+    bankrupt: boolean
+  }>
+  tradesCompleted: number
+  totalMoneyTransferred: number
+  turnsPlayed: number
+}
+
 export interface GameState {
   phase: 'lobby' | 'playing' | 'finished'
   players: Player[]
@@ -95,13 +123,15 @@ export interface GameState {
   lastCard: LastCard | null
   winner: string | null
   startMoney: number
+  settings: GameSettings
+  finalStats: FinalStatistics | null
 }
 
 export interface RoomView {
   code: string
   hostId: string
   players: { id: string; name: string; connected: boolean }[]
-  settings: { startMoney: number }
+  settings: { startMoney: number; freeParking: boolean; auctionEnabled: boolean; goSalary: number }
   started: boolean
   game: GameState | null
 }
