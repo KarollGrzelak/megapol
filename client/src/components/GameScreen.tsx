@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { socket } from '../socket'
+import { socket, clearRoomCode } from '../socket'
 import { sounds } from '../sounds'
 import { BOARD, GROUP_COLORS } from '../../../shared/board'
 import { ownsWholeGroup, minHousesInGroup } from '../../../shared/rules'
@@ -7,9 +7,29 @@ import type { GameState, Player, RoomView } from '../../../shared/types'
 import Board, { PlayerList } from './Board'
 import { useToast } from './Toast'
 
-/* ─── Action Panel (compact) ──────────────────────────────────────────── */
+/* ─── Confirm Modal (reusable) ──────────────────────────────────────────── */
 
-function ActionPanel({ state, myId, code }: { state: GameState; myId: string; code: string }) {
+function ConfirmModal({ title, message, confirmLabel, confirmClass, onConfirm, onClose }: {
+  title: string; message: string; confirmLabel: string; confirmClass?: string
+  onConfirm: () => void; onClose: () => void
+}) {
+  return (
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: '380px' }}>
+        <h3 style={{ marginBottom: '.6rem' }}>{title}</h3>
+        <p style={{ fontSize: '.9rem', color: 'var(--text2)', marginBottom: '1rem', lineHeight: '1.5' }}>{message}</p>
+        <div className="row">
+          <button className={`btn ${confirmClass || 'primary'}`} onClick={onConfirm}>{confirmLabel}</button>
+          <button className="btn ghost" onClick={onClose}>Anuluj</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ─── Right Panel Action (for states that need side panel: auction, trade, jail, buy) ── */
+
+function SideActionPanel({ state, myId, code }: { state: GameState; myId: string; code: string }) {
   const me = state.players.find((p) => p.id === myId)
   const { addToast } = useToast()
   if (!me) return null
@@ -117,13 +137,8 @@ function ActionPanel({ state, myId, code }: { state: GameState; myId: string; co
     )
   }
 
-  // Main CTA
-  return (
-    <div className="action-panel">
-      {state.awaiting === 'roll' && <button className="btn primary big roll-btn" onClick={() => act({ type: 'roll' })}>🎲 Rzuć kośćmi</button>}
-      {state.awaiting === 'end' && <button className="btn primary big end-btn" onClick={() => act({ type: 'end-turn' })}>Zakończ turę</button>}
-    </div>
-  )
+  // No side action needed (main CTA is in board center now)
+  return null
 }
 
 /* ─── Property Panel (compact) ────────────────────────────────────────── */
@@ -138,41 +153,45 @@ function PropertyPanel({ state, myId, code }: { state: GameState; myId: string; 
   if (myProps.length === 0) return null
 
   return (
-    <div className="property-panel">
-      <h3>Nieruchomości ({myProps.length})</h3>
-      <div className="prop-list">
-        {myProps.map((tile) => {
-          const p = state.properties[tile.id]
-          const group = tile.group ?? ''
-          const hasWhole = ownsWholeGroup(state, group, myId)
-          const canBuild = isMyTurn && tile.type === 'street' && tile.houseCost && hasWhole && !p.mortgaged && p.houses < 5 && minHousesInGroup(state, group) >= p.houses
-          const canSell = isMyTurn && tile.type === 'street' && p.houses > 0 && maxHousesInGroup(state, group) <= p.houses
-          const canMortgage = isMyTurn && !p.mortgaged && groupHasNoBuildingsInGroup(state, group)
-          const canUnmortgage = isMyTurn && p.mortgaged && me.money >= Math.ceil((tile.price ?? 0) * 0.55)
-          const rent = tile.type === 'street' && tile.rent ? (p.houses > 0 ? tile.rent[p.houses] : hasWhole ? tile.rent[0] * 2 : tile.rent[0]) : null
+    <div className="panel-section property-panel">
+      <div className="panel-section-header">
+        <span className="panel-section-title">Nieruchomości ({myProps.length})</span>
+      </div>
+      <div className="panel-section-body">
+        <div className="prop-list">
+          {myProps.map((tile) => {
+            const p = state.properties[tile.id]
+            const group = tile.group ?? ''
+            const hasWhole = ownsWholeGroup(state, group, myId)
+            const canBuild = isMyTurn && tile.type === 'street' && tile.houseCost && hasWhole && !p.mortgaged && p.houses < 5 && minHousesInGroup(state, group) >= p.houses
+            const canSell = isMyTurn && tile.type === 'street' && p.houses > 0 && maxHousesInGroup(state, group) <= p.houses
+            const canMortgage = isMyTurn && !p.mortgaged && groupHasNoBuildingsInGroup(state, group)
+            const canUnmortgage = isMyTurn && p.mortgaged && me.money >= Math.ceil((tile.price ?? 0) * 0.55)
+            const rent = tile.type === 'street' && tile.rent ? (p.houses > 0 ? tile.rent[p.houses] : hasWhole ? tile.rent[0] * 2 : tile.rent[0]) : null
 
-          return (
-            <div key={tile.id} className={`prop-card ${p.mortgaged ? 'mortgaged' : ''}`}>
-              <div className="prop-color-bar" style={{ background: group ? GROUP_COLORS[group] : '#888' }} />
-              <div className="prop-info">
-                <span className="prop-name">{tile.name}</span>
-                <span className="prop-meta">
-                  {rent != null && <span>{rent} zł</span>}
-                  {p.houses > 0 && <span className="prop-houses">{p.houses === 5 ? '🏨' : '🏠'.repeat(p.houses)}</span>}
-                  {hasWhole && p.houses === 0 && <span className="prop-monopol">monopol</span>}
-                </span>
-                {(canBuild || canSell || canMortgage || canUnmortgage) && (
-                  <div className="prop-actions">
-                    {canBuild && tile.houseCost && <button className="btn tiny" onClick={() => act({ type: 'buy-house', tileId: tile.id })}>+🏠 {tile.houseCost}</button>}
-                    {canSell && tile.houseCost && <button className="btn tiny" onClick={() => act({ type: 'sell-house', tileId: tile.id })}>-🏠 +{Math.floor(tile.houseCost / 2)}</button>}
-                    {canMortgage && <button className="btn tiny" onClick={() => act({ type: 'mortgage', tileId: tile.id })}>Hip +{Math.floor((tile.price ?? 0) / 2)}</button>}
-                    {canUnmortgage && <button className="btn tiny" onClick={() => act({ type: 'unmortgage', tileId: tile.id })}>Spłać {Math.ceil((tile.price ?? 0) * 0.55)}</button>}
-                  </div>
-                )}
+            return (
+              <div key={tile.id} className={`prop-card ${p.mortgaged ? 'mortgaged' : ''}`}>
+                <div className="prop-color-bar" style={{ background: group ? GROUP_COLORS[group] : '#888' }} />
+                <div className="prop-info">
+                  <span className="prop-name">{tile.name}</span>
+                  <span className="prop-meta">
+                    {rent != null && <span>{rent} zł</span>}
+                    {p.houses > 0 && <span className="prop-houses">{p.houses === 5 ? '🏨' : '🏠'.repeat(p.houses)}</span>}
+                    {hasWhole && p.houses === 0 && <span className="prop-monopol">monopol</span>}
+                  </span>
+                  {(canBuild || canSell || canMortgage || canUnmortgage) && (
+                    <div className="prop-actions">
+                      {canBuild && tile.houseCost && <button className="btn tiny" onClick={() => act({ type: 'buy-house', tileId: tile.id })}>+🏠 {tile.houseCost}</button>}
+                      {canSell && tile.houseCost && <button className="btn tiny" onClick={() => act({ type: 'sell-house', tileId: tile.id })}>-🏠 +{Math.floor(tile.houseCost / 2)}</button>}
+                      {canMortgage && <button className="btn tiny" onClick={() => act({ type: 'mortgage', tileId: tile.id })}>Hip +{Math.floor((tile.price ?? 0) / 2)}</button>}
+                      {canUnmortgage && <button className="btn tiny" onClick={() => act({ type: 'unmortgage', tileId: tile.id })}>Spłać {Math.ceil((tile.price ?? 0) * 0.55)}</button>}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
     </div>
   )
@@ -185,7 +204,7 @@ function maxHousesInGroup(state: GameState, group: string): number {
   return Math.max(...BOARD.filter((t) => t.group === group).map((t) => state.properties[t.id]?.houses ?? 0))
 }
 
-/* ─── Trade (modal) ───────────────────────────────────────────────────── */
+/* ─── Trade (inline button → modal) ────────────────────────────────────── */
 
 function TradeButton({ state, myId, code }: { state: GameState; myId: string; code: string }) {
   const [open, setOpen] = useState(false)
@@ -193,7 +212,7 @@ function TradeButton({ state, myId, code }: { state: GameState; myId: string; co
   if (!me || me.bankrupt || state.phase !== 'playing' || state.trade) return null
   return (
     <>
-      <button className="btn ghost" style={{ width: '100%' }} onClick={() => setOpen(true)}>🤝 Handluj</button>
+      <button className="btn ghost" style={{ width: '100%', fontSize: '.78rem' }} onClick={() => setOpen(true)}>🤝 Handluj</button>
       {open && <TradeModal state={state} myId={myId} code={code} onClose={() => setOpen(false)} />}
     </>
   )
@@ -248,43 +267,60 @@ function TradeModal({ state, myId, code, onClose }: { state: GameState; myId: st
   )
 }
 
-/* ─── Tabs (Log + Chat) ───────────────────────────────────────────────── */
+/* ─── Chat (collapsible, in left panel) ────────────────────────────────── */
 
-function TabsPanel({ state, myId, code }: { state: GameState; myId: string; code: string }) {
-  const [tab, setTab] = useState<'log' | 'chat'>('log')
+function ChatPanel({ state, code }: { state: GameState; code: string }) {
+  const [open, setOpen] = useState(false)
   const [msg, setMsg] = useState('')
-  const [soundOn, setSoundOn] = useState(sounds.isEnabled())
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [state.log.length, state.chat?.length, tab])
+  useEffect(() => {
+    if (open && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [state.chat?.length, open])
 
   const send = () => { if (!msg.trim()) return; socket.emit('chat', { code, text: msg.trim() }); setMsg('') }
+  const unread = state.chat?.length ?? 0
+
+  if (!open) {
+    return (
+      <button className="btn ghost chat-toggle" onClick={() => setOpen(true)}>
+        💬 Czat {unread > 0 && <span className="chat-badge">{unread > 99 ? '99+' : unread}</span>}
+      </button>
+    )
+  }
 
   return (
-    <div className="tabs-panel">
-      <div className="tabs-header">
-        <button className={`tab-btn ${tab === 'log' ? 'active' : ''}`} onClick={() => setTab('log')}>Dziennik</button>
-        <button className={`tab-btn ${tab === 'chat' ? 'active' : ''}`} onClick={() => setTab('chat')}>Czat</button>
-        <button className="sound-btn" onClick={() => { const on = sounds.toggle(); setSoundOn(on) }} title="Dźwięki" style={{ margin: '.3rem' }}>{soundOn ? '🔊' : '🔇'}</button>
+    <div className="chat-panel">
+      <div className="chat-panel-header">
+        <span style={{ fontWeight: 600, fontSize: '.8rem' }}>💬 Czat</span>
+        <button className="btn tiny" onClick={() => setOpen(false)}>✕</button>
       </div>
-      <div className="tabs-content" ref={scrollRef}>
-        {tab === 'log' && state.log.slice(-50).map((e) => (
-          <div key={e.seq} className={`log-entry log-${e.kind}`}>{e.text}</div>
-        ))}
-        {tab === 'chat' && state.chat?.slice(-50).map((m) => (
+      <div className="chat-panel-messages" ref={scrollRef}>
+        {(state.chat?.slice(-30) ?? []).map((m) => (
           <div key={m.seq} className="chat-msg">
             <span className="chat-author" style={{ color: state.players.find((p) => p.id === m.playerId)?.color }}>{m.playerName}:</span>
             {m.text}
           </div>
         ))}
       </div>
-      {tab === 'chat' && (
-        <div className="chat-input-row">
-          <input className="input" placeholder="Napisz…" value={msg} maxLength={200} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} />
-          <button className="btn secondary" onClick={send}>→</button>
-        </div>
-      )}
+      <div className="chat-input-row">
+        <input className="input" placeholder="Napisz…" value={msg} maxLength={200} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} />
+        <button className="btn secondary" onClick={send}>→</button>
+      </div>
     </div>
+  )
+}
+
+/* ─── Sound button ─────────────────────────────────────────────────────── */
+
+function SoundToggle() {
+  const [soundOn, setSoundOn] = useState(sounds.isEnabled())
+  return (
+    <button
+      className="sound-btn"
+      onClick={() => { const on = sounds.toggle(); setSoundOn(on) }}
+      title={soundOn ? 'Dźwięki włączone' : 'Dźwięki wyłączone'}
+    >{soundOn ? '🔊' : '🔇'}</button>
   )
 }
 
@@ -326,6 +362,8 @@ export default function GameScreen({ room, myId }: { room: RoomView; myId: strin
   const code = room.code
   const prevLogRef = useRef(state.log.length)
   const { addToast } = useToast()
+  const [showLeaveModal, setShowLeaveModal] = useState(false)
+  const [showSurrenderModal, setShowSurrenderModal] = useState(false)
 
   useEffect(() => {
     if (state.log.length > prevLogRef.current) {
@@ -351,24 +389,113 @@ export default function GameScreen({ room, myId }: { room: RoomView; myId: strin
     prevTurnRef.current = state.currentIdx
   }, [state.currentIdx, cur?.id, myId, state.phase, addToast])
 
+  const me = state.players.find(p => p.id === myId)
+  const isMyTurn = cur?.id === myId && state.phase === 'playing'
+
+  const handleLeave = () => {
+    socket.emit('leave-room')
+    clearRoomCode()
+    window.location.reload()
+  }
+
+  const handleSurrender = () => {
+    socket.emit('action', { code, action: { type: 'surrender' } })
+    addToast('Poddajesz się…', 'warning')
+    setShowSurrenderModal(false)
+  }
+
   if (state.phase === 'finished' && state.winner) return <WinnerScreen state={state} myId={myId} />
 
   return (
     <div className="screen game">
       <div className="game-layout">
-        <div className="game-left"><Board state={state} /></div>
-        <div className="game-right">
-          <div className="game-header">
-            <h2 className="logo small">MEGA<span>POL</span></h2>
-            <span className="room-badge">{room.code}</span>
+        {/* ── LEFT PANEL: Room info + Chat ─────────────────────────── */}
+        <div className="game-left-panel">
+          {/* Room info card */}
+          <div className="room-info-card">
+            <div className="room-info-header">
+              <div>
+                <div className="room-info-label">Pokój</div>
+                <div className="room-info-code">{room.code}</div>
+              </div>
+              <SoundToggle />
+            </div>
+            <div className="room-info-share">
+              <button className="btn ghost room-info-copy" onClick={() => {
+                navigator.clipboard?.writeText(`${window.location.origin}/?room=${room.code}`)
+                addToast('Link skopiowany!', 'success')
+              }}>📋 Kopiuj link</button>
+            </div>
           </div>
-          <PlayerList state={state} myId={myId} />
-          <ActionPanel state={state} myId={myId} code={code} />
+
+          {/* Chat */}
+          <ChatPanel state={state} code={code} />
+        </div>
+
+        {/* ── CENTER: Board (the king) ─────────────────────────────── */}
+        <div className="game-center">
+          <Board state={state} myId={myId} code={code} />
+        </div>
+
+        {/* ── RIGHT PANEL: Players + Actions + Properties ──────────── */}
+        <div className="game-right">
+          {/* Player list */}
+          <div className="panel-section">
+            <div className="panel-section-header">
+              <span className="panel-section-title">Gracze</span>
+              <span className="room-badge">{room.code}</span>
+            </div>
+            <div className="panel-section-body" style={{ padding: '.25rem .35rem' }}>
+              <PlayerList state={state} myId={myId} />
+            </div>
+          </div>
+
+          {/* Side actions (auction, trade, jail, buy — when not in center CTA) */}
+          <SideActionPanel state={state} myId={myId} code={code} />
+
+          {/* Properties */}
           <PropertyPanel state={state} myId={myId} code={code} />
+
+          {/* Trade button */}
           <TradeButton state={state} myId={myId} code={code} />
-          <TabsPanel state={state} myId={myId} code={code} />
+
+          {/* Game actions: Leave + Surrender */}
+          {state.phase === 'playing' && me && !me.bankrupt && (
+            <div className="game-actions">
+              <button className="btn ghost game-action-btn" onClick={() => setShowLeaveModal(true)}>
+                🚪 Wyjdź
+              </button>
+              <button className="btn ghost game-action-btn danger-action" onClick={() => setShowSurrenderModal(true)}>
+                🏳️ Poddaj się
+              </button>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Leave confirmation modal */}
+      {showLeaveModal && (
+        <ConfirmModal
+          title="🚪 Opuść grę?"
+          message="Na pewno chcesz opuścić tę rozgrywkę? Po wyjściu utracisz możliwość powrotu do tej partii."
+          confirmLabel="Opuść grę"
+          confirmClass="primary"
+          onConfirm={handleLeave}
+          onClose={() => setShowLeaveModal(false)}
+        />
+      )}
+
+      {/* Surrender confirmation modal */}
+      {showSurrenderModal && (
+        <ConfirmModal
+          title="🏳️ Poddaj się?"
+          message="Czy na pewno chcesz się poddać? To zakończy Twój udział w rozgrywce. Wszystkie Twoje nieruchomości zostaną utracone."
+          confirmLabel="Poddaj się"
+          confirmClass="danger"
+          onConfirm={handleSurrender}
+          onClose={() => setShowSurrenderModal(false)}
+        />
+      )}
     </div>
   )
 }

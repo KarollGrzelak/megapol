@@ -238,6 +238,7 @@ export class Game {
       case 'trade-accept': return this.respondTrade(playerId, true)
       case 'trade-decline': return this.respondTrade(playerId, false)
       case 'trade-cancel': return this.cancelTrade(playerId)
+      case 'surrender': return this.surrender(playerId)
       case 'chat': return this.sendChat(playerId, action.text)
     }
   }
@@ -844,6 +845,43 @@ export class Game {
     if (!trade || trade.from !== playerId) return
     this.state.trade = null
     this.log(`🤝 ${this.player(playerId)?.name} wycofuje propozycję handlu.`)
+  }
+
+  // ── Poddanie się ────────────────────────────────────────────────────────
+
+  private surrender(playerId: string) {
+    const p = this.player(playerId)
+    if (!p || p.bankrupt || this.state.phase !== 'playing') return
+    if (this.state.trade && (this.state.trade.from === playerId || this.state.trade.to === playerId)) {
+      this.state.trade = null
+    }
+    if (this.state.auction && this.state.auction.participants.includes(playerId)) {
+      if (!this.state.auction.passed.includes(playerId)) this.state.auction.passed.push(playerId)
+      this.advanceAuction(this.state.auction)
+    }
+    this.log(`🏳️ ${p.name} poddaje się!`, 'big')
+    p.money = 0
+    p.bankrupt = true
+    p.inJail = false
+    for (let i = 0; i < BOARD.length; i++) {
+      const prop = this.state.properties[i]
+      if (prop.owner === p.id) { prop.owner = null; prop.houses = 0; prop.mortgaged = false }
+    }
+    // Skip bankrupt players in turn order
+    if (this.state.players[this.state.currentIdx]?.id === playerId) {
+      this.state.doublesCount = 0
+      this.state.extraRoll = false
+      this.state.dice = null
+      this.state.awaiting = 'roll'
+      const n = this.state.players.length
+      let idx = this.state.currentIdx
+      for (let i = 0; i < n; i++) {
+        idx = (idx + 1) % n
+        if (!this.state.players[idx].bankrupt) break
+      }
+      this.state.currentIdx = idx
+    }
+    this.checkWin()
   }
 
   // ── Czat ──────────────────────────────────────────────────────────────────

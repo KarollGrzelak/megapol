@@ -153,4 +153,5 @@ export type ClientAction =
   | { type: 'trade-accept' }
   | { type: 'trade-decline' }
   | { type: 'trade-cancel' }
+  | { type: 'surrender' }
   | { type: 'chat'; text: string }

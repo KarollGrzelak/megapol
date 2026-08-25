@@ -3,8 +3,27 @@ import { BOARD, GROUP_COLORS, GROUP_NAMES } from '../../../shared/board'
 import { gridPos } from '../../../shared/rules'
 import type { GameState, Player } from '../../../shared/types'
 import { useGameAnimations, getInterpolatedPosition, type PawnAnimation } from '../animations'
+import { socket } from '../socket'
+import { sounds } from '../sounds'
+import { useToast } from './Toast'
 
 const DICE_FACES: Record<number, string> = { 1: '⚀', 2: '⚁', 3: '⚂', 4: '⚃', 5: '⚄', 6: '⚅' }
+
+// Corner types for visual distinction
+const CORNER_CLASSES: Record<number, string> = {
+  0: 'corner-go',
+  10: 'corner-jail',
+  20: 'corner-parking',
+  30: 'corner-gotojail',
+}
+
+// Special corner icons
+const CORNER_ICONS: Record<number, string> = {
+  0: '➡',
+  10: '🔒',
+  20: '🅿',
+  30: '👮',
+}
 
 interface TooltipData { x: number; y: number; tile: typeof BOARD[number]; state: GameState }
 
@@ -21,10 +40,11 @@ function TileView({ id, state, onHover, landedTile, landedAt }: {
   const pos = gridPos(id)
   const isCorner = [0, 10, 20, 30].includes(id)
   const isLanded = landedTile === id && (Date.now() - landedAt) < 1200
+  const cornerClass = CORNER_CLASSES[id] || ''
 
   return (
     <div
-      className={`tile ${isCorner ? 'corner' : ''} ${prop?.mortgaged ? 'mortgaged' : ''} ${isLanded ? 'landed' : ''}`}
+      className={`tile ${isCorner ? 'corner' : ''} ${cornerClass} ${prop?.mortgaged ? 'mortgaged' : ''} ${isLanded ? 'landed' : ''}`}
       style={{ gridRow: pos.row, gridColumn: pos.col }}
       onMouseEnter={(e) => onHover({ x: e.clientX, y: e.clientY, tile, state }, e)}
       onMouseMove={(e) => onHover({ x: e.clientX, y: e.clientY, tile, state }, e)}
@@ -32,14 +52,29 @@ function TileView({ id, state, onHover, landedTile, landedAt }: {
     >
       {tile.group && <div className="band" style={{ background: GROUP_COLORS[tile.group] }} />}
       <div className="tile-body">
-        <span className="tile-name">{tile.name}</span>
-        {tile.price != null && <span className="tile-price">{tile.price}</span>}
-        {prop && prop.houses > 0 && (
+        {isCorner ? (
+          <>
+            <span className="tile-name" style={{ fontSize: 'clamp(6px, 1.2vw, 12px)' }}>
+              {tile.name.split('/')[0].trim()}
+            </span>
+            <span style={{ fontSize: 'clamp(10px, 2vw, 20px)', marginTop: '2px' }}>
+              {CORNER_ICONS[id]}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="tile-name">{tile.name}</span>
+            {tile.price != null && <span className="tile-price">{tile.price} zł</span>}
+          </>
+        )}
+        {!isCorner && prop && prop.houses > 0 && (
           <span className="houses">{prop.houses === 5 ? '🏨' : '🏠'.repeat(prop.houses)}</span>
         )}
         {prop?.mortgaged && <span className="lock">🔒</span>}
       </div>
-      {owner && <div className="owner-indicator" style={{ background: owner.color }} />}
+      {owner && !isCorner && (
+        <div className="owner-indicator" style={{ background: owner.color }} />
+      )}
     </div>
   )
 }
@@ -82,32 +117,90 @@ function PropertyTooltip({ data }: { data: TooltipData }) {
   )
 }
 
-// ─── Board Center ───────────────────────────────────────────────────────────
+// ─── Board Center (gameplay stage: dice + CTA + log) ────────────────────────
 
-function BoardCenter({ state, dice, isRolling, displayDice }: {
-  state: GameState; dice: [number, number] | null; isRolling: boolean; displayDice: [number, number] | null
+function BoardCenter({ state, dice, isRolling, displayDice, myId, code }: {
+  state: GameState; dice: [number, number] | null; isRolling: boolean
+  displayDice: [number, number] | null; myId: string; code: string
 }) {
   const cur = state.players[state.currentIdx]
+  const isMyTurn = cur?.id === myId
+  const me = state.players.find(p => p.id === myId)
+  const logContainerRef = useRef<HTMLDivElement>(null)
+  const logEndRef = useRef<HTMLDivElement>(null)
+  const { addToast } = useToast()
 
+  // Auto-scroll log
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
+    }
+  }, [state.log.length])
+
+  // Action handler for center CTA
+  const act = (action: Record<string, unknown>) => {
+    const type = action.type as string
+    if (type === 'roll') sounds.diceRoll()
+    else if (type === 'buy') { sounds.buyProperty(); addToast('Kupiono!', 'success') }
+    else if (type === 'end-turn') sounds.turnStart()
+    socket.emit('action', { code, action })
+  }
+
+  // Context-aware action text
   let actionText = ''
+  let actionContext = ''
   if (state.phase === 'finished' && state.winner) {
     actionText = `${state.players.find((p) => p.id === state.winner)?.name} wygrywa!`
+    actionContext = '🏆'
   } else if (cur) {
-    if (state.awaiting === 'roll') actionText = 'Rzuć kośćmi'
-    else if (state.awaiting === 'buy') actionText = `Kupić ${BOARD[state.pendingTile!]?.name}?`
-    else if (state.awaiting === 'end') actionText = 'Zakończ turę'
-    else if (state.auction) actionText = 'Licytacja'
-    else if (state.trade) actionText = 'Handel'
+    if (state.awaiting === 'roll') {
+      actionText = isMyTurn ? 'Rzuć kośćmi' : `${cur.name} rzuca...`
+      actionContext = '🎲'
+    } else if (state.awaiting === 'buy') {
+      actionText = `Kupić ${BOARD[state.pendingTile!]?.name}?`
+      actionContext = '🏷'
+    } else if (state.awaiting === 'end') {
+      actionText = isMyTurn ? 'Zakończ turę' : `${cur.name} kończy turę`
+      actionContext = '⏱'
+    } else if (state.auction) {
+      actionText = 'Licytacja'
+      actionContext = '🏷'
+    } else if (state.trade) {
+      actionText = 'Handel'
+      actionContext = '🤝'
+    }
   }
+
+  // Dice result message
+  const diceResult = useMemo(() => {
+    if (!dice || isRolling) return null
+    const sum = dice[0] + dice[1]
+    if (dice[0] === dice[1]) return `Dublet! ${sum}`
+    return `Wyrzuciłeś ${sum}`
+  }, [dice, isRolling])
+
+  // Last card message
+  const lastCard = state.lastCard
+
+  // Determine which CTA to show in center
+  const showRollCTA = isMyTurn && state.awaiting === 'roll' && !state.auction && !state.trade && !me?.inJail
+  const showEndCTA = isMyTurn && state.awaiting === 'end'
+  const showBuyCTA = isMyTurn && state.awaiting === 'buy' && state.pendingTile != null
 
   return (
     <div className="board-center">
-      <div className="center-logo">MEGA<span>POL</span></div>
-      {cur && state.phase === 'playing' && (
-        <div className="center-turn">
-          <span className="turn-name" style={{ color: cur.color }}>{cur.name}</span>
-        </div>
-      )}
+      {/* Top: Logo + Turn */}
+      <div className="center-top">
+        <div className="center-logo">MEGA<span>POL</span></div>
+        {cur && state.phase === 'playing' && (
+          <div className="center-turn">
+            <span className="turn-name" style={{ color: cur.color }}>{cur.name}</span>
+            {isMyTurn && <span className="turn-mine">Twoja tura</span>}
+          </div>
+        )}
+      </div>
+
+      {/* Middle: Dice */}
       <div className="center-dice">
         {displayDice ? (
           <>
@@ -118,14 +211,89 @@ function BoardCenter({ state, dice, isRolling, displayDice }: {
           <span className="die idle">🎲</span>
         )}
       </div>
-      {actionText && <div className="center-action">{actionText}</div>}
+
+      {/* Dice result */}
+      {diceResult && !isRolling && (
+        <div className={`center-dice-result ${dice && dice[0] === dice[1] ? 'doubles' : ''}`}>
+          {diceResult}
+        </div>
+      )}
+
+      {/* Action text (when no CTA button) */}
+      {actionText && !diceResult && !showRollCTA && !showEndCTA && !showBuyCTA && (
+        <div className="center-action">{actionContext} {actionText}</div>
+      )}
+
+      {/* ── MAIN CTA BUTTON — in the center of the board ── */}
+      {showRollCTA && (
+        <button className="btn center-action-btn roll-cta" onClick={() => act({ type: 'roll' })}>
+          🎲 Rzuć kośćmi
+        </button>
+      )}
+      {showEndCTA && (
+        <button className="btn center-action-btn end-cta" onClick={() => act({ type: 'end-turn' })}>
+          ⏱ Zakończ turę
+        </button>
+      )}
+      {showBuyCTA && me && (() => {
+        const tile = BOARD[state.pendingTile!]
+        const canAfford = me.money >= (tile.price ?? 0)
+        return (
+          <div style={{ display: 'flex', gap: '.3rem', width: '100%', maxWidth: '90%', marginTop: '.1rem' }}>
+            <button className="btn center-action-btn buy-cta" style={{ flex: 2 }} disabled={!canAfford} onClick={() => act({ type: 'buy' })}>
+              🏷 {canAfford ? `Kup za ${tile.price} zł` : 'Brak środków'}
+            </button>
+            <button className="btn center-action-btn" style={{ flex: 1, background: 'var(--surface3)', color: 'var(--text2)', boxShadow: 'none' }} onClick={() => act({ type: 'decline-buy' })}>
+              Odmów
+            </button>
+          </div>
+        )
+      })()}
+
+      {/* Last card */}
+      {lastCard && (
+        <div className="center-card-msg">
+          {lastCard.playerName}: {lastCard.text}
+        </div>
+      )}
+
+      {/* Money display */}
+      {me && state.phase === 'playing' && (
+        <div className="center-money">
+          {isMyTurn ? `💰 ${me.money} zł` : `${cur?.name}: 💰 ${cur?.money} zł`}
+        </div>
+      )}
+
+      {/* Game log — Richup.io style, in the center of the board */}
+      <div className="center-log" ref={logContainerRef}>
+        {state.log.slice(-30).map((e) => (
+          <div key={e.seq} className={`clog-entry clog-${e.kind}`}>
+            {e.text}
+          </div>
+        ))}
+        <div ref={logEndRef} />
+      </div>
     </div>
   )
 }
 
+// ─── Multi-player pawn offset ───────────────────────────────────────────────
+
+function getPawnOffset(playerIdx: number, totalOnTile: number): { row: number; col: number } {
+  if (totalOnTile <= 1) return { row: 0, col: 0 }
+  const positions = [
+    { row: -0.15, col: -0.15 },
+    { row: -0.15, col: 0.15 },
+    { row: 0.15, col: -0.15 },
+    { row: 0.15, col: 0.15 },
+    { row: 0, col: 0 },
+  ]
+  return positions[playerIdx % positions.length]
+}
+
 // ─── Main Board ─────────────────────────────────────────────────────────────
 
-export default function Board({ state }: { state: GameState }) {
+export default function Board({ state, myId, code }: { state: GameState; myId: string; code: string }) {
   const [tooltip, setTooltip] = useState<TooltipData | null>(null)
   const dice = state.dice
   const { animations, checkPawnMovement, startDiceRoll, showGoBonusEffect, showPaymentEffect } = useGameAnimations()
@@ -183,27 +351,62 @@ export default function Board({ state }: { state: GameState }) {
     return dice
   }, [dice, isRolling, rollingStep])
 
+  const playersPerTile = useMemo(() => {
+    const counts = new Map<number, number>()
+    state.players.filter(p => !p.bankrupt).forEach(p => {
+      const pos = animations.pawns.get(p.id)
+        ? getInterpolatedPosition(animations.pawns.get(p.id)!, now).pos
+        : p.position
+      counts.set(pos, (counts.get(pos) || 0) + 1)
+    })
+    return counts
+  }, [state.players, animations.pawns, now])
+
+  const tilePlayerIdx = useMemo(() => {
+    const idxMap = new Map<string, number>()
+    const tileCounts = new Map<number, number>()
+    state.players.filter(p => !p.bankrupt).forEach(p => {
+      const pos = animations.pawns.get(p.id)
+        ? getInterpolatedPosition(animations.pawns.get(p.id)!, now).pos
+        : p.position
+      const count = tileCounts.get(pos) || 0
+      idxMap.set(p.id, count)
+      tileCounts.set(pos, count + 1)
+    })
+    return idxMap
+  }, [state.players, animations.pawns, now])
+
   return (
     <div className="board">
       {[...Array(40)].map((_, i) => (
         <TileView key={i} id={i} state={state} onHover={handleHover} landedTile={animations.landedTile} landedAt={animations.landedAt} />
       ))}
 
-      {state.players.filter(p => !p.bankrupt).map(player => {
+      {state.players.filter(p => !p.bankrupt).map((player, pi) => {
         const { pos } = getTokenPos(player)
         const gp = gridPos(pos)
         const anim = animations.pawns.get(player.id)
         const isCurrentTurn = state.players[state.currentIdx]?.id === player.id
+        const totalOnTile = playersPerTile.get(pos) || 1
+        const myIdx = tilePlayerIdx.get(player.id) || 0
+        const offset = getPawnOffset(myIdx, totalOnTile)
+        const offsetRow = totalOnTile > 1 ? offset.row * 0.3 : 0
+        const offsetCol = totalOnTile > 1 ? offset.col * 0.3 : 0
         return (
           <div key={player.id}
             className={`board-token ${isCurrentTurn ? 'active' : ''} ${anim ? 'moving' : ''}`}
-            style={{ gridRow: gp.row, gridColumn: gp.col, '--token-color': player.color, zIndex: isCurrentTurn ? 20 : 10 } as React.CSSProperties}
+            style={{
+              gridRow: gp.row + offsetRow,
+              gridColumn: gp.col + offsetCol,
+              '--token-color': player.color,
+              zIndex: isCurrentTurn ? 20 : 10 + pi,
+            } as React.CSSProperties}
             title={player.name}
           >{player.token}</div>
         )
       })}
 
-      <BoardCenter state={state} dice={dice} isRolling={isRolling} displayDice={displayDice} />
+      <BoardCenter state={state} dice={dice} isRolling={isRolling} displayDice={displayDice} myId={myId} code={code} />
 
       {animations.showGoBonus && <div className="go-bonus-effect"><span>+200 zł</span></div>}
       {animations.showPayEffect && (() => {
@@ -231,8 +434,12 @@ export function PlayerList({ state, myId }: { state: GameState; myId: string }) 
       {state.players.map((p: Player) => (
         <div key={p.id} className={`player-row ${p.id === myId ? 'me' : ''} ${p.bankrupt ? 'bankrupt' : ''} ${state.players[state.currentIdx]?.id === p.id && state.phase === 'playing' ? 'turn' : ''}`}>
           <span className="token small" style={{ borderColor: p.color }}>{p.token}</span>
-          <span className="p-name">{p.name}{p.inJail && !p.bankrupt ? ' 🔒' : ''}{!p.connected && !p.bankrupt ? ' ⚠' : ''}</span>
-          <span className="p-money">{p.bankrupt ? '—' : `${p.money} zł`}</span>
+          <span className="p-name">
+            {p.name}
+            {p.inJail && !p.bankrupt ? ' 🔒' : ''}
+            {!p.connected && !p.bankrupt ? ' ⚠' : ''}
+          </span>
+          <span className="p-money">{p.bankrupt ? 'bankrut' : `${p.money} zł`}</span>
         </div>
       ))}
     </div>
