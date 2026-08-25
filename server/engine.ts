@@ -139,7 +139,7 @@ export class Game {
     return true
   }
 
-  addPlayer(id: string, name: string, token?: string, color?: string) {
+  addPlayer(id: string, name: string, token?: string, color?: string, isBot = false) {
     const i = this.state.players.length
     if (i >= MAX_PLAYERS) throw new Error('Pokój jest pełny')
     this.state.players.push({
@@ -148,8 +148,86 @@ export class Game {
       token: token || TOKENS[i % TOKENS.length],
       money: this.state.startMoney,
       position: 0, inJail: false, jailTurns: 0, jailCards: 0,
-      bankrupt: false, connected: true
+      bankrupt: false, connected: true, isBot
     })
+  }
+
+  removePlayer(id: string) {
+    const idx = this.state.players.findIndex(p => p.id === id)
+    if (idx !== -1) this.state.players.splice(idx, 1)
+  }
+
+  /** Check if it's a bot's turn and play automatically */
+  checkBotTurn(): boolean {
+    const cur = this.current()
+    if (!cur || !cur.isBot || cur.bankrupt || this.state.phase !== 'playing') return false
+    if (this.state.trade) return false
+    // Bot takes action after a short delay
+    setTimeout(() => this.botPlay(), 800 + Math.random() * 1200)
+    return true
+  }
+
+  private botPlay() {
+    const cur = this.current()
+    if (!cur || !cur.isBot || cur.bankrupt) return
+
+    // Jail
+    if (cur.inJail) {
+      if (cur.jailCards > 0) { this.handleAction(cur.id, { type: 'use-jail-card' }); this.botAfterAction(); return }
+      if (cur.money >= 50 && Math.random() > 0.4) { this.handleAction(cur.id, { type: 'pay-bail' }); this.botAfterAction(); return }
+      this.handleAction(cur.id, { type: 'roll' }); this.botAfterAction(); return
+    }
+
+    // Roll
+    if (this.state.awaiting === 'roll') {
+      this.handleAction(cur.id, { type: 'roll' });
+      this.botAfterAction();
+      return
+    }
+
+    // Buy
+    if (this.state.awaiting === 'buy' && this.state.pendingTile != null) {
+      const tile = BOARD[this.state.pendingTile]
+      const canAfford = cur.money >= (tile.price ?? 0)
+      // Bot buys if: can afford, has >400 money buffer, or price < 200
+      const shouldBuy = canAfford && (cur.money > 400 || (tile.price ?? 0) < 200)
+      if (shouldBuy) {
+        this.handleAction(cur.id, { type: 'buy' })
+      } else {
+        this.handleAction(cur.id, { type: 'decline-buy' })
+      }
+      this.botAfterAction();
+      return
+    }
+
+    // Auction
+    if (this.state.auction) {
+      const a = this.state.auction
+      if (a.participants[a.turnIdx] === cur.id && !a.passed.includes(cur.id)) {
+        if (a.bid + 10 <= cur.money && Math.random() > 0.3) {
+          this.handleAction(cur.id, { type: 'auction-bid', amount: a.bid + (Math.random() > 0.5 ? 50 : 10) })
+        } else {
+          this.handleAction(cur.id, { type: 'auction-pass' })
+        }
+      }
+      this.botAfterAction();
+      return
+    }
+
+    // End turn
+    if (this.state.awaiting === 'end') {
+      this.handleAction(cur.id, { type: 'end-turn' })
+      this.botAfterAction();
+      return
+    }
+  }
+
+  private botAfterAction() {
+    // After each bot action, check if another bot action is needed
+    const cur = this.current()
+    if (cur?.isBot && !cur.bankrupt && this.state.phase === 'playing' && !this.state.trade) {
+      setTimeout(() => this.botPlay(), 600 + Math.random() * 800)
+    }
   }
 
   start() {

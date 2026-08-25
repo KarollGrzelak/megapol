@@ -34,6 +34,7 @@ export interface Player {
   jailCards: number     // karty "wyjdź z więzienia"
   bankrupt: boolean
   connected: boolean
+  isBot?: boolean
 }
 
 export interface Auction {

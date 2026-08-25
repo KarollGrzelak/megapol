@@ -329,12 +329,18 @@ function AppInner() {
                   {p.token || '🎲'}
                 </span>
                 <span className="lobby-player-name">
-                  {p.name}{p.id === room.hostId ? ' 👑' : ''}
+                  {p.name}{p.id === room.hostId ? ' 👑' : ''}{p.id.startsWith('bot-') ? ' 🤖' : ''}
                 </span>
                 {!p.connected && <span className="offline-tag">offline</span>}
+                {isHost && p.id.startsWith('bot-') && (
+                  <button className="btn tiny" style={{ fontSize: '.6rem', padding: '.15rem .4rem' }} onClick={() => socket.emit('room:remove-bot', { code: room.code, botId: p.id })}>✕</button>
+                )}
               </div>
             ))}
           </div>
+          {isHost && room.players.length < 6 && (
+            <button className="btn ghost" style={{ width: '100%', fontSize: '.8rem', marginTop: '.3rem' }} onClick={() => socket.emit('room:add-bot', { code: room.code })}>🤖 Dodaj bota</button>
+          )}
 
           {/* Wybór pionka dla bieżącego gracza */}
           {(() => {

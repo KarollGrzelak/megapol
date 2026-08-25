@@ -165,15 +165,49 @@ io.on('connection', (socket) => {
     broadcast(room)
   })
 
+  // ── Bot management (lobby only, host only) ─────────────────────────────
+
+  socket.on('room:add-bot', ({ code }: { code: string }) => {
+    const room = rooms.get(String(code || '').toUpperCase())
+    if (!room || room.game || socket.data.playerId !== room?.hostId) return
+    if (room.players.size >= 6) return emitError(socket, 'Pokój jest pełny.')
+    const botCount = [...room.players.values()].filter(p => p.id.startsWith('bot-')).length
+    const botNames = ['Bot Ada', 'Bot Max', 'Bot Zen', 'Bot Neo', 'Bot Ira', 'Bot Rex']
+    const botTokens = ['🤖', '👾', '🎯', '🔮', '⚡', '🎮']
+    const botColors = ['#9b5de5', '#f48c06', '#ef476f', '#06d6a0', '#118ab2', '#ffd166']
+    const idx = botCount
+    const botId = `bot-${Date.now()}-${idx}`
+    room.players.set(botId, {
+      id: botId,
+      name: botNames[idx % botNames.length],
+      token: botTokens[idx % botTokens.length],
+      color: botColors[idx % botColors.length]
+    })
+    broadcast(room)
+  })
+
+  socket.on('room:remove-bot', ({ code, botId }: { code: string; botId: string }) => {
+    const room = rooms.get(String(code || '').toUpperCase())
+    if (!room || room.game || socket.data.playerId !== room?.hostId) return
+    if (!botId.startsWith('bot-')) return
+    room.players.delete(botId)
+    broadcast(room)
+  })
+
   socket.on('game:start', ({ code }: { code: string }) => {
     const room = rooms.get(String(code || '').toUpperCase())
     if (!room || room.game || socket.data.playerId !== room?.hostId) return
     try {
       const game = new Game(room.settings)
-      for (const p of room.players.values()) game.addPlayer(p.id, p.name, p.token, p.color)
+      for (const p of room.players.values()) {
+        const isBot = p.id.startsWith('bot-')
+        game.addPlayer(p.id, p.name, p.token, p.color, isBot)
+      }
       game.start()
       room.game = game
       broadcast(room)
+      // Trigger bot if first player is a bot
+      game.checkBotTurn()
     } catch (e) {
       emitError(socket, e instanceof Error ? e.message : 'Nie udało się rozpocząć gry.')
     }
@@ -188,6 +222,8 @@ io.on('connection', (socket) => {
     try {
       room.game.handleAction(pid, action)
       broadcast(room)
+      // Check if next player is a bot
+      room.game.checkBotTurn()
     } catch { /* nieprawidłowe akcje ignorujemy */ }
   })
 

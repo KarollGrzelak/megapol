@@ -7,11 +7,8 @@ import type { GameState, Player, RoomView } from '../../../shared/types'
 import Board, { PlayerList } from './Board'
 import { useToast } from './Toast'
 
-/* ─── Confirm Modal (reusable) ──────────────────────────────────────────── */
-
 function ConfirmModal({ title, message, confirmLabel, confirmClass, onConfirm, onClose }: {
-  title: string; message: string; confirmLabel: string; confirmClass?: string
-  onConfirm: () => void; onClose: () => void
+  title: string; message: string; confirmLabel: string; confirmClass?: string; onConfirm: () => void; onClose: () => void
 }) {
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -27,7 +24,7 @@ function ConfirmModal({ title, message, confirmLabel, confirmClass, onConfirm, o
   )
 }
 
-/* ─── Right Panel Action (for states that need side panel: auction, trade, jail, buy) ── */
+/* ─── Side Action Panel (auction, trade, jail, buy — shown in right panel) ── */
 
 function SideActionPanel({ state, myId, code }: { state: GameState; myId: string; code: string }) {
   const me = state.players.find((p) => p.id === myId)
@@ -35,7 +32,6 @@ function SideActionPanel({ state, myId, code }: { state: GameState; myId: string
   if (!me) return null
   const cur = state.players[state.currentIdx]
   const isMyTurn = cur?.id === myId && state.phase === 'playing' && !state.trade
-
   const act = (action: Record<string, unknown>) => {
     const type = action.type as string
     if (type === 'roll') sounds.diceRoll()
@@ -48,11 +44,8 @@ function SideActionPanel({ state, myId, code }: { state: GameState; myId: string
     socket.emit('action', { code, action })
   }
 
-  // Auction
   if (state.auction) {
-    const a = state.auction
-    const myTurn = a.participants[a.turnIdx] === myId && !a.passed.includes(myId)
-    const tile = BOARD[a.tileId]
+    const a = state.auction; const myTurn = a.participants[a.turnIdx] === myId && !a.passed.includes(myId); const tile = BOARD[a.tileId]
     return (
       <div className="action-panel auction-panel">
         <div className="auction-property">
@@ -71,10 +64,8 @@ function SideActionPanel({ state, myId, code }: { state: GameState; myId: string
     )
   }
 
-  // Incoming trade
   if (state.trade && state.trade.to === myId) {
-    const t = state.trade
-    const from = state.players.find((p) => p.id === t.from)
+    const t = state.trade; const from = state.players.find((p) => p.id === t.from)
     return (
       <div className="action-panel">
         <h3>Handel od {from?.name}</h3>
@@ -89,23 +80,18 @@ function SideActionPanel({ state, myId, code }: { state: GameState; myId: string
       </div>
     )
   }
-
   if (state.trade && state.trade.from === myId) {
     return <div className="action-panel"><p className="subtitle">Oczekiwanie na odpowiedź…</p><button className="btn secondary" style={{ marginTop: '.3rem' }} onClick={() => act({ type: 'trade-cancel' })}>Wycofaj</button></div>
   }
 
-  // Not my turn
   if (!isMyTurn) {
-    return (
-      <div className="action-panel action-waiting">
-        {state.phase === 'finished' && state.winner
-          ? <p className="subtitle">{state.winner === myId ? 'Wygrałeś!' : `${state.players.find((p) => p.id === state.winner)?.name} wygrywa!`}</p>
-          : <p className="subtitle"><span className="wait-name">{cur?.name}</span> gra…</p>}
-      </div>
-    )
+    return <div className="action-panel action-waiting">
+      {state.phase === 'finished' && state.winner
+        ? <p className="subtitle">{state.winner === myId ? 'Wygrałeś!' : `${state.players.find((p) => p.id === state.winner)?.name} wygrywa!`}</p>
+        : <p className="subtitle"><span className="wait-name">{cur?.name}</span>{cur?.isBot ? ' 🤖' : ''} gra…</p>}
+    </div>
   }
 
-  // Jail
   if (me.inJail) {
     return (
       <div className="action-panel jail-panel">
@@ -118,10 +104,8 @@ function SideActionPanel({ state, myId, code }: { state: GameState; myId: string
     )
   }
 
-  // Buy
   if (state.awaiting === 'buy' && state.pendingTile != null) {
-    const tile = BOARD[state.pendingTile]
-    const canAfford = me.money >= (tile.price ?? 0)
+    const tile = BOARD[state.pendingTile]; const canAfford = me.money >= (tile.price ?? 0)
     return (
       <div className="action-panel buy-panel">
         <div className="buy-header">
@@ -137,38 +121,29 @@ function SideActionPanel({ state, myId, code }: { state: GameState; myId: string
     )
   }
 
-  // No side action needed (main CTA is in board center now)
   return null
 }
 
-/* ─── Property Panel (compact) ────────────────────────────────────────── */
+/* ─── Property Panel ─────────────────────────────────────────────────── */
 
 function PropertyPanel({ state, myId, code }: { state: GameState; myId: string; code: string }) {
-  const me = state.players.find((p) => p.id === myId)
-  if (!me) return null
+  const me = state.players.find((p) => p.id === myId); if (!me) return null
   const isMyTurn = state.players[state.currentIdx]?.id === myId && state.phase === 'playing' && !state.trade
   const act = (action: Record<string, unknown>) => socket.emit('action', { code, action })
-
   const myProps = BOARD.filter((t) => state.properties[t.id]?.owner === myId && t.price)
   if (myProps.length === 0) return null
-
   return (
     <div className="panel-section property-panel">
-      <div className="panel-section-header">
-        <span className="panel-section-title">Nieruchomości ({myProps.length})</span>
-      </div>
+      <div className="panel-section-header"><span className="panel-section-title">Nieruchomości ({myProps.length})</span></div>
       <div className="panel-section-body">
         <div className="prop-list">
           {myProps.map((tile) => {
-            const p = state.properties[tile.id]
-            const group = tile.group ?? ''
-            const hasWhole = ownsWholeGroup(state, group, myId)
+            const p = state.properties[tile.id]; const group = tile.group ?? ''; const hasWhole = ownsWholeGroup(state, group, myId)
             const canBuild = isMyTurn && tile.type === 'street' && tile.houseCost && hasWhole && !p.mortgaged && p.houses < 5 && minHousesInGroup(state, group) >= p.houses
             const canSell = isMyTurn && tile.type === 'street' && p.houses > 0 && maxHousesInGroup(state, group) <= p.houses
             const canMortgage = isMyTurn && !p.mortgaged && groupHasNoBuildingsInGroup(state, group)
             const canUnmortgage = isMyTurn && p.mortgaged && me.money >= Math.ceil((tile.price ?? 0) * 0.55)
             const rent = tile.type === 'street' && tile.rent ? (p.houses > 0 ? tile.rent[p.houses] : hasWhole ? tile.rent[0] * 2 : tile.rent[0]) : null
-
             return (
               <div key={tile.id} className={`prop-card ${p.mortgaged ? 'mortgaged' : ''}`}>
                 <div className="prop-color-bar" style={{ background: group ? GROUP_COLORS[group] : '#888' }} />
@@ -196,112 +171,66 @@ function PropertyPanel({ state, myId, code }: { state: GameState; myId: string; 
     </div>
   )
 }
+function groupHasNoBuildingsInGroup(state: GameState, group: string): boolean { return BOARD.filter((t) => t.group === group).every((t) => (state.properties[t.id]?.houses ?? 0) === 0) }
+function maxHousesInGroup(state: GameState, group: string): number { return Math.max(...BOARD.filter((t) => t.group === group).map((t) => state.properties[t.id]?.houses ?? 0)) }
 
-function groupHasNoBuildingsInGroup(state: GameState, group: string): boolean {
-  return BOARD.filter((t) => t.group === group).every((t) => (state.properties[t.id]?.houses ?? 0) === 0)
-}
-function maxHousesInGroup(state: GameState, group: string): number {
-  return Math.max(...BOARD.filter((t) => t.group === group).map((t) => state.properties[t.id]?.houses ?? 0))
-}
-
-/* ─── Trade (inline button → modal) ────────────────────────────────────── */
+/* ─── Trade ──────────────────────────────────────────────────────────── */
 
 function TradeButton({ state, myId, code }: { state: GameState; myId: string; code: string }) {
-  const [open, setOpen] = useState(false)
-  const me = state.players.find((p) => p.id === myId)
+  const [open, setOpen] = useState(false); const me = state.players.find((p) => p.id === myId)
   if (!me || me.bankrupt || state.phase !== 'playing' || state.trade) return null
-  return (
-    <>
-      <button className="btn ghost" style={{ width: '100%', fontSize: '.78rem' }} onClick={() => setOpen(true)}>🤝 Handluj</button>
-      {open && <TradeModal state={state} myId={myId} code={code} onClose={() => setOpen(false)} />}
-    </>
-  )
+  return <><button className="btn ghost" style={{ width: '100%', fontSize: '.78rem' }} onClick={() => setOpen(true)}>🤝 Handluj</button>
+    {open && <TradeModal state={state} myId={myId} code={code} onClose={() => setOpen(false)} />}</>
 }
 
 function TradeModal({ state, myId, code, onClose }: { state: GameState; myId: string; code: string; onClose: () => void }) {
-  const [targetId, setTargetId] = useState('')
-  const [cashGive, setCashGive] = useState(0)
-  const [cashGet, setCashGet] = useState(0)
-  const [propsGive, setPropsGive] = useState<number[]>([])
-  const [propsGet, setPropsGet] = useState<number[]>([])
-  const { addToast } = useToast()
-  const me = state.players.find((p) => p.id === myId)
-  if (!me) return null
+  const [targetId, setTargetId] = useState(''); const [cashGive, setCashGive] = useState(0); const [cashGet, setCashGet] = useState(0)
+  const [propsGive, setPropsGive] = useState<number[]>([]); const [propsGet, setPropsGet] = useState<number[]>([])
+  const { addToast } = useToast(); const me = state.players.find((p) => p.id === myId); if (!me) return null
   const others = state.players.filter((p) => p.id !== myId && !p.bankrupt)
   const myOwnable = BOARD.filter((t) => state.properties[t.id]?.owner === myId && t.price)
   const targetOwnable = targetId ? BOARD.filter((t) => state.properties[t.id]?.owner === targetId && t.price) : []
-
   const submit = () => {
     if (!targetId || (cashGive <= 0 && propsGive.length === 0 && cashGet <= 0 && propsGet.length === 0)) return
     socket.emit('action', { code, action: { type: 'trade-propose', to: targetId, give: { cash: cashGive, properties: propsGive }, get: { cash: cashGet, properties: propsGet } } })
     onClose(); addToast('Propozycja wysłana', 'info')
   }
-
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <h3>🤝 Handel</h3>
         <label className="label">Z graczem:</label>
         <select className="input" value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-          <option value="">— wybierz —</option>
-          {others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          <option value="">— wybierz —</option>{others.map((p) => <option key={p.id} value={p.id}>{p.name}{(p as any).isBot ? ' 🤖' : ''}</option>)}
         </select>
         {targetId && <>
-          <div className="trade-half">
-            <b style={{ fontSize: '.85rem' }}>Oddajesz:</b>
+          <div className="trade-half"><b style={{ fontSize: '.85rem' }}>Oddajesz:</b>
             <label className="label small">Gotówka: <input type="number" min={0} max={me.money} value={cashGive} onChange={(e) => setCashGive(Math.max(0, Number(e.target.value)))} className="input tiny" /> zł</label>
             {myOwnable.map((t) => <label key={t.id} className="check"><input type="checkbox" checked={propsGive.includes(t.id)} onChange={() => setPropsGive((p) => p.includes(t.id) ? p.filter((x) => x !== t.id) : [...p, t.id])} />{t.name}</label>)}
           </div>
-          <div className="trade-half">
-            <b style={{ fontSize: '.85rem' }}>Żądasz:</b>
+          <div className="trade-half"><b style={{ fontSize: '.85rem' }}>Żądasz:</b>
             <label className="label small">Gotówka: <input type="number" min={0} max={state.players.find((p) => p.id === targetId)?.money ?? 0} value={cashGet} onChange={(e) => setCashGet(Math.max(0, Number(e.target.value)))} className="input tiny" /> zł</label>
             {targetOwnable.map((t) => <label key={t.id} className="check"><input type="checkbox" checked={propsGet.includes(t.id)} onChange={() => setPropsGet((p) => p.includes(t.id) ? p.filter((x) => x !== t.id) : [...p, t.id])} />{t.name}</label>)}
           </div>
-          <div className="row">
-            <button className="btn primary" onClick={submit}>Wyślij</button>
-            <button className="btn ghost" onClick={onClose}>Anuluj</button>
-          </div>
+          <div className="row"><button className="btn primary" onClick={submit}>Wyślij</button><button className="btn ghost" onClick={onClose}>Anuluj</button></div>
         </>}
       </div>
     </div>
   )
 }
 
-/* ─── Chat (collapsible, in left panel) ────────────────────────────────── */
+/* ─── Chat ───────────────────────────────────────────────────────────── */
 
 function ChatPanel({ state, code }: { state: GameState; code: string }) {
-  const [open, setOpen] = useState(false)
-  const [msg, setMsg] = useState('')
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (open && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [state.chat?.length, open])
-
+  const [open, setOpen] = useState(false); const [msg, setMsg] = useState(''); const scrollRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { if (open && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [state.chat?.length, open])
   const send = () => { if (!msg.trim()) return; socket.emit('chat', { code, text: msg.trim() }); setMsg('') }
-  const unread = state.chat?.length ?? 0
-
-  if (!open) {
-    return (
-      <button className="btn ghost chat-toggle" onClick={() => setOpen(true)}>
-        💬 Czat {unread > 0 && <span className="chat-badge">{unread > 99 ? '99+' : unread}</span>}
-      </button>
-    )
-  }
-
+  if (!open) return <button className="btn ghost chat-toggle" onClick={() => setOpen(true)}>💬 Czat {(state.chat?.length ?? 0) > 0 && <span className="chat-badge">{state.chat!.length > 99 ? '99+' : state.chat!.length}</span>}</button>
   return (
     <div className="chat-panel">
-      <div className="chat-panel-header">
-        <span style={{ fontWeight: 600, fontSize: '.8rem' }}>💬 Czat</span>
-        <button className="btn tiny" onClick={() => setOpen(false)}>✕</button>
-      </div>
+      <div className="chat-panel-header"><span style={{ fontWeight: 600, fontSize: '.8rem' }}>💬 Czat</span><button className="btn tiny" onClick={() => setOpen(false)}>✕</button></div>
       <div className="chat-panel-messages" ref={scrollRef}>
-        {(state.chat?.slice(-30) ?? []).map((m) => (
-          <div key={m.seq} className="chat-msg">
-            <span className="chat-author" style={{ color: state.players.find((p) => p.id === m.playerId)?.color }}>{m.playerName}:</span>
-            {m.text}
-          </div>
-        ))}
+        {(state.chat?.slice(-30) ?? []).map((m) => <div key={m.seq} className="chat-msg"><span className="chat-author" style={{ color: state.players.find((p) => p.id === m.playerId)?.color }}>{m.playerName}:</span>{m.text}</div>)}
       </div>
       <div className="chat-input-row">
         <input className="input" placeholder="Napisz…" value={msg} maxLength={200} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} />
@@ -311,73 +240,64 @@ function ChatPanel({ state, code }: { state: GameState; code: string }) {
   )
 }
 
-/* ─── Sound button ─────────────────────────────────────────────────────── */
-
 function SoundToggle() {
   const [soundOn, setSoundOn] = useState(sounds.isEnabled())
-  return (
-    <button
-      className="sound-btn"
-      onClick={() => { const on = sounds.toggle(); setSoundOn(on) }}
-      title={soundOn ? 'Dźwięki włączone' : 'Dźwięki wyłączone'}
-    >{soundOn ? '🔊' : '🔇'}</button>
-  )
+  return <button className="sound-btn" onClick={() => { const on = sounds.toggle(); setSoundOn(on) }} title={soundOn ? 'Dźwięki włączone' : 'Dźwięki wyłączone'}>{soundOn ? '🔊' : '🔇'}</button>
 }
 
-/* ─── Winner Screen ───────────────────────────────────────────────────── */
-
 function WinnerScreen({ state, myId }: { state: GameState; myId: string }) {
-  const winner = state.players.find(p => p.id === state.winner)
-  const stats = state.finalStats
-  const isWinner = state.winner === myId
+  const winner = state.players.find(p => p.id === state.winner); const stats = state.finalStats; const isWinner = state.winner === myId
   return (
-    <div className="winner-screen">
-      <div className="winner-card">
-        <h2 className="winner-title">{isWinner ? '🏆 Wygrałeś!' : `🏆 ${winner?.name} wygrywa!`}</h2>
-        {stats && <div className="winner-stats">
-          <h3>Statystyki</h3>
-          <div className="stats-grid">
-            {stats.players.map((p, i) => (
-              <div key={p.id} className={`stat-row ${p.id === myId ? 'me' : ''} ${p.bankrupt ? 'bankrupt' : ''}`}>
-                <span className="stat-place">#{i + 1}</span>
-                <span className="stat-token" style={{ color: p.color }}>●</span>
-                <span className="stat-name">{p.name}</span>
-                <span className="stat-money">{p.netWorth} zł</span>
-              </div>
-            ))}
+    <div className="winner-screen"><div className="winner-card">
+      <h2 className="winner-title">{isWinner ? '🏆 Wygrałeś!' : `🏆 ${winner?.name} wygrywa!`}</h2>
+      {stats && <div className="winner-stats"><h3>Statystyki</h3>
+        <div className="stats-grid">{stats.players.map((p, i) => (
+          <div key={p.id} className={`stat-row ${p.id === myId ? 'me' : ''} ${p.bankrupt ? 'bankrupt' : ''}`}>
+            <span className="stat-place">#{i + 1}</span><span className="stat-token" style={{ color: p.color }}>●</span>
+            <span className="stat-name">{p.name}</span><span className="stat-money">{p.netWorth} zł</span>
           </div>
-          <div className="stats-summary">
-            <p>Tur: {stats.turnsPlayed} · Transakcji: {stats.tradesCompleted} · Obrót: {stats.totalMoneyTransferred} zł</p>
-          </div>
-        </div>}
-      </div>
-    </div>
+        ))}</div>
+        <div className="stats-summary"><p>Tur: {stats.turnsPlayed} · Transakcji: {stats.tradesCompleted} · Obrót: {stats.totalMoneyTransferred} zł</p></div>
+      </div>}
+    </div></div>
   )
 }
 
 /* ─── Main Game Screen ────────────────────────────────────────────────── */
 
 export default function GameScreen({ room, myId }: { room: RoomView; myId: string }) {
-  const state = room.game!
-  const code = room.code
-  const prevLogRef = useRef(state.log.length)
-  const { addToast } = useToast()
-  const [showLeaveModal, setShowLeaveModal] = useState(false)
-  const [showSurrenderModal, setShowSurrenderModal] = useState(false)
+  const state = room.game!; const code = room.code
+  const prevLogRef = useRef(state.log.length); const { addToast } = useToast()
+  const [showLeaveModal, setShowLeaveModal] = useState(false); const [showSurrenderModal, setShowSurrenderModal] = useState(false)
 
+  // Enhanced event popups — show ALL game events as elegant toasts
   useEffect(() => {
     if (state.log.length > prevLogRef.current) {
       const last = state.log[state.log.length - 1]
+      // Big events
       if (last.kind === 'big') {
-        if (last.text.includes('bankrut')) { sounds.bankrupt(); addToast(last.text, 'error') }
-        else if (last.text.includes('wygrywa')) { sounds.win(); addToast(last.text, 'success', 5000) }
+        if (last.text.includes('bankrut')) { sounds.bankrupt(); addToast(last.text, 'error', 4000) }
+        else if (last.text.includes('wygrywa')) { sounds.win(); addToast(last.text, 'success', 6000) }
         else if (last.text.includes('więzienia')) { sounds.jail(); addToast(last.text, 'warning') }
         else if (last.text.includes('dublet')) { sounds.doubles(); addToast(last.text, 'warning') }
-      } else if (last.kind === 'money') {
-        if (last.text.includes('płaci')) sounds.moneyLoss()
-        else if (last.text.includes('kupuje')) sounds.buyProperty()
-        else sounds.moneyGain()
-      } else if (last.kind === 'card') { sounds.card(); addToast(last.text, 'info') }
+        else if (last.text.includes('poddaje')) { addToast(last.text, 'warning') }
+        else { addToast(last.text, 'info') }
+      }
+      // Money events
+      else if (last.kind === 'money') {
+        if (last.text.includes('płaci')) { sounds.moneyLoss(); addToast(last.text, 'warning') }
+        else if (last.text.includes('kupuje')) { sounds.buyProperty(); addToast(last.text, 'success') }
+        else if (last.text.includes('przechodzi przez START')) { sounds.moneyGain(); addToast(last.text, 'success') }
+        else { sounds.moneyGain(); addToast(last.text, 'info') }
+      }
+      // Card events
+      else if (last.kind === 'card') { sounds.card(); addToast(last.text, 'info') }
+      // Info events — show only notable ones
+      else if (last.kind === 'info') {
+        if (last.text.includes('Gra rozpoczęta')) addToast(last.text, 'success', 4000)
+        else if (last.text.includes('wyrzuca')) addToast(last.text, 'info')
+        else if (last.text.includes('zostaje w więzieniu')) addToast(last.text, 'warning')
+      }
     }
     prevLogRef.current = state.log.length
   }, [state.log.length, addToast])
@@ -390,112 +310,53 @@ export default function GameScreen({ room, myId }: { room: RoomView; myId: strin
   }, [state.currentIdx, cur?.id, myId, state.phase, addToast])
 
   const me = state.players.find(p => p.id === myId)
-  const isMyTurn = cur?.id === myId && state.phase === 'playing'
-
-  const handleLeave = () => {
-    socket.emit('leave-room')
-    clearRoomCode()
-    window.location.reload()
-  }
-
-  const handleSurrender = () => {
-    socket.emit('action', { code, action: { type: 'surrender' } })
-    addToast('Poddajesz się…', 'warning')
-    setShowSurrenderModal(false)
-  }
+  const handleLeave = () => { socket.emit('leave-room'); clearRoomCode(); window.location.reload() }
+  const handleSurrender = () => { socket.emit('action', { code, action: { type: 'surrender' } }); addToast('Poddajesz się…', 'warning'); setShowSurrenderModal(false) }
 
   if (state.phase === 'finished' && state.winner) return <WinnerScreen state={state} myId={myId} />
 
   return (
     <div className="screen game">
       <div className="game-layout">
-        {/* ── LEFT PANEL: Room info + Chat ─────────────────────────── */}
         <div className="game-left-panel">
-          {/* Room info card */}
           <div className="room-info-card">
             <div className="room-info-header">
-              <div>
-                <div className="room-info-label">Pokój</div>
-                <div className="room-info-code">{room.code}</div>
-              </div>
+              <div><div className="room-info-label">Pokój</div><div className="room-info-code">{room.code}</div></div>
               <SoundToggle />
             </div>
             <div className="room-info-share">
-              <button className="btn ghost room-info-copy" onClick={() => {
-                navigator.clipboard?.writeText(`${window.location.origin}/?room=${room.code}`)
-                addToast('Link skopiowany!', 'success')
-              }}>📋 Kopiuj link</button>
+              <button className="btn ghost room-info-copy" onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/?room=${room.code}`); addToast('Link skopiowany!', 'success') }}>📋 Kopiuj link</button>
             </div>
           </div>
-
-          {/* Chat */}
           <ChatPanel state={state} code={code} />
         </div>
 
-        {/* ── CENTER: Board (the king) ─────────────────────────────── */}
-        <div className="game-center">
-          <Board state={state} myId={myId} code={code} />
-        </div>
+        <div className="game-center"><Board state={state} myId={myId} code={code} /></div>
 
-        {/* ── RIGHT PANEL: Players + Actions + Properties ──────────── */}
         <div className="game-right">
-          {/* Player list */}
           <div className="panel-section">
             <div className="panel-section-header">
-              <span className="panel-section-title">Gracze</span>
+              <span className="panel-section-title">Gracze ({state.players.length})</span>
               <span className="room-badge">{room.code}</span>
             </div>
-            <div className="panel-section-body" style={{ padding: '.25rem .35rem' }}>
-              <PlayerList state={state} myId={myId} />
-            </div>
+            <div className="panel-section-body" style={{ padding: '.25rem .35rem' }}><PlayerList state={state} myId={myId} /></div>
           </div>
 
-          {/* Side actions (auction, trade, jail, buy — when not in center CTA) */}
           <SideActionPanel state={state} myId={myId} code={code} />
-
-          {/* Properties */}
           <PropertyPanel state={state} myId={myId} code={code} />
-
-          {/* Trade button */}
           <TradeButton state={state} myId={myId} code={code} />
 
-          {/* Game actions: Leave + Surrender */}
           {state.phase === 'playing' && me && !me.bankrupt && (
             <div className="game-actions">
-              <button className="btn ghost game-action-btn" onClick={() => setShowLeaveModal(true)}>
-                🚪 Wyjdź
-              </button>
-              <button className="btn ghost game-action-btn danger-action" onClick={() => setShowSurrenderModal(true)}>
-                🏳️ Poddaj się
-              </button>
+              <button className="btn ghost game-action-btn" onClick={() => setShowLeaveModal(true)}>🚪 Wyjdź</button>
+              <button className="btn ghost game-action-btn danger-action" onClick={() => setShowSurrenderModal(true)}>🏳️ Poddaj się</button>
             </div>
           )}
         </div>
       </div>
 
-      {/* Leave confirmation modal */}
-      {showLeaveModal && (
-        <ConfirmModal
-          title="🚪 Opuść grę?"
-          message="Na pewno chcesz opuścić tę rozgrywkę? Po wyjściu utracisz możliwość powrotu do tej partii."
-          confirmLabel="Opuść grę"
-          confirmClass="primary"
-          onConfirm={handleLeave}
-          onClose={() => setShowLeaveModal(false)}
-        />
-      )}
-
-      {/* Surrender confirmation modal */}
-      {showSurrenderModal && (
-        <ConfirmModal
-          title="🏳️ Poddaj się?"
-          message="Czy na pewno chcesz się poddać? To zakończy Twój udział w rozgrywce. Wszystkie Twoje nieruchomości zostaną utracone."
-          confirmLabel="Poddaj się"
-          confirmClass="danger"
-          onConfirm={handleSurrender}
-          onClose={() => setShowSurrenderModal(false)}
-        />
-      )}
+      {showLeaveModal && <ConfirmModal title="🚪 Opuść grę?" message="Na pewno chcesz opuścić tę rozgrywkę? Po wyjściu utracisz możliwość powrotu do tej partii." confirmLabel="Opuść grę" confirmClass="primary" onConfirm={handleLeave} onClose={() => setShowLeaveModal(false)} />}
+      {showSurrenderModal && <ConfirmModal title="🏳️ Poddaj się?" message="Czy na pewno chcesz się poddać? To zakończy Twój udział w rozgrywce. Wszystkie Twoje nieruchomości zostaną utracone." confirmLabel="Poddaj się" confirmClass="danger" onConfirm={handleSurrender} onClose={() => setShowSurrenderModal(false)} />}
     </div>
   )
 }
