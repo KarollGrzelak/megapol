@@ -109,7 +109,6 @@ function BoardCenter({ state, dice, isRolling, displayDice, myId, code }: {
   return (
     <div className="board-center">
       <div className="center-top">
-        <div className="center-logo">MEGA<span>POL</span></div>
         {cur && state.phase === 'playing' && (
           <div className="center-turn">
             <span className="turn-name" style={{ color: cur.color }}>{cur.name}</span>
