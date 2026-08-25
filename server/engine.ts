@@ -5,7 +5,7 @@ import { CARDS_CHEST, CARDS_CHANCE, type CardDef } from '../shared/cards'
 import {
   calcRent, groupHasNoBuildings, minHousesInGroup, ownsWholeGroup
 } from '../shared/rules'
-import type { ClientAction, GameState, LogEntry, Player } from '../shared/types'
+import type { ClientAction, ChatMessage, GameState, LogEntry, Player } from '../shared/types'
 
 export const MAX_PLAYERS = 6
 
@@ -31,6 +31,7 @@ export interface GameSettings {
 export class Game {
   state: GameState
   private logSeq = 0
+  private chatSeq = 0
   private cardSeq = 0
   private chanceDeck: number[] = []
   private chestDeck: number[] = []
@@ -50,6 +51,7 @@ export class Game {
       trade: null,
       log: [],
       lastCard: null,
+      chat: [],
       winner: null,
       startMoney: settings.startMoney
     }
@@ -142,6 +144,7 @@ export class Game {
       case 'trade-accept': return this.respondTrade(playerId, true)
       case 'trade-decline': return this.respondTrade(playerId, false)
       case 'trade-cancel': return this.cancelTrade(playerId)
+      case 'chat': return this.sendChat(playerId, action.text)
     }
   }
 
@@ -686,6 +689,23 @@ export class Game {
     if (!trade || trade.from !== playerId) return
     this.state.trade = null
     this.log(`🤝 ${this.player(playerId)?.name} wycofuje propozycję handlu.`)
+  }
+
+  // ── Czat ──────────────────────────────────────────────────────────────────
+
+  private sendChat(playerId: string, text: string) {
+    const p = this.player(playerId)
+    if (!p || p.bankrupt) return
+    const trimmed = String(text ?? '').trim().slice(0, 200)
+    if (trimmed.length === 0) return
+    this.state.chat.push({
+      seq: ++this.chatSeq,
+      playerId: p.id,
+      playerName: p.name,
+      text: trimmed,
+      timestamp: Date.now()
+    })
+    if (this.state.chat.length > 100) this.state.chat.splice(0, this.state.chat.length - 100)
   }
 }
 

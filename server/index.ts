@@ -155,6 +155,14 @@ io.on('connection', (socket) => {
     } catch { /* nieprawidłowe akcje ignorujemy */ }
   })
 
+  socket.on('chat', ({ code, text }: { code: string; text: string }) => {
+    const room = rooms.get(String(code || '').toUpperCase())
+    const pid = socket.data.playerId as string | undefined
+    if (!room?.game || !pid) return
+    room.game.handleAction(pid, { type: 'chat', text })
+    broadcast(room)
+  })
+
   socket.on('leave-room', () => {
     handleLeave(socket)
     socket.rooms.forEach((room) => socket.leave(room))

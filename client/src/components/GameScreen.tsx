@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { socket } from '../socket'
+import { sounds } from '../sounds'
 import { BOARD } from '../../../shared/board'
 import { ownsWholeGroup, calcRent, minHousesInGroup } from '../../../shared/rules'
 import type { GameState, Player } from '../../../shared/types'
@@ -14,8 +15,17 @@ function ActionPanel({ state, myId, code }: { state: GameState; myId: string; co
   const cur = state.players[state.currentIdx]
   const isMyTurn = cur?.id === myId && state.phase === 'playing' && !state.trade
 
-  const act = (action: Record<string, unknown>) =>
+  const act = (action: Record<string, unknown>) => {
+    // Dźwięki dla różnych akcji
+    const type = action.type as string
+    if (type === 'roll') sounds.diceRoll()
+    else if (type === 'buy') sounds.buyProperty()
+    else if (type === 'end-turn') sounds.turnStart()
+    else if (type === 'pay-bail' || type === 'use-jail-card') sounds.jail()
+    else if (type === 'auction-bid') sounds.moneyGain()
+    else if (type === 'buy-house' || type === 'sell-house') sounds.buyProperty()
     socket.emit('action', { code, action })
+  }
 
   // — Licytacja —
   if (state.auction) {
@@ -352,11 +362,93 @@ function LogPanel({ state }: { state: GameState }) {
   )
 }
 
+/* ─── Panel czatu ────────────────────────────────────────────────────────── */
+
+function ChatPanel({ state, myId, code }: { state: GameState; myId: string; code: string }) {
+  const [msg, setMsg] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [soundOn, setSoundOn] = useState(sounds.isEnabled())
+
+  const send = () => {
+    if (!msg.trim()) return
+    socket.emit('chat', { code, text: msg.trim() })
+    setMsg('')
+  }
+
+  const toggleSound = () => {
+    const on = sounds.toggle()
+    setSoundOn(on)
+  }
+
+  const scrollToBottom = () => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }
+
+  // Auto-scroll na dół
+  useEffect(() => {
+    scrollToBottom()
+  }, [state.chat?.length])
+
+  return (
+    <div className="chat-panel">
+      <h3>💬 Czat</h3>
+      <div className="chat-messages" ref={scrollRef}>
+        {state.chat?.slice(-50).map((m) => (
+          <div key={m.seq} className="chat-msg">
+            <span className="chat-author" style={{ color: state.players.find((p) => p.id === m.playerId)?.color }}>
+              {m.playerName}:
+            </span>
+            {m.text}
+          </div>
+        ))}
+      </div>
+      <div className="chat-input-row">
+        <input
+          className="input"
+          placeholder="Napisz wiadomość..."
+          value={msg}
+          maxLength={200}
+          onChange={(e) => setMsg(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && send()}
+        />
+        <button className="btn secondary" onClick={send}>📨</button>
+        <button className="sound-btn" onClick={toggleSound} title="Dźwięki">
+          {soundOn ? '🔊' : '🔇'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /* ─── Główny ekran gry ──────────────────────────────────────────────────── */
 
 export default function GameScreen({ room, myId }: { room: RoomView; myId: string }) {
   const state = room.game!
   const code = room.code
+  const prevLogRef = useRef(state.log.length)
+  const prevWinnerRef = useRef(state.winner)
+
+  // Odtwarzaj dźwięki gdy pojawiają się nowe logi
+  useEffect(() => {
+    if (state.log.length > prevLogRef.current) {
+      const lastLog = state.log[state.log.length - 1]
+      if (lastLog.kind === 'big') {
+        if (lastLog.text.includes('bankrut')) sounds.bankrupt()
+        else if (lastLog.text.includes('wygrywa')) sounds.win()
+        else if (lastLog.text.includes('więzienia')) sounds.jail()
+        else if (lastLog.text.includes('dublet')) sounds.doubles()
+      } else if (lastLog.kind === 'money') {
+        if (lastLog.text.includes('płaci')) sounds.moneyLoss()
+        else if (lastLog.text.includes('kupuje')) sounds.buyProperty()
+        else sounds.moneyGain()
+      } else if (lastLog.kind === 'card') {
+        sounds.card()
+      }
+    }
+    prevLogRef.current = state.log.length
+  }, [state.log.length])
 
   return (
     <div className="screen game">
@@ -373,6 +465,7 @@ export default function GameScreen({ room, myId }: { room: RoomView; myId: strin
           <ActionPanel state={state} myId={myId} code={code} />
           <PropertyPanel state={state} myId={myId} code={code} />
           <TradePanel state={state} myId={myId} code={code} />
+          <ChatPanel state={state} myId={myId} code={code} />
           <LogPanel state={state} />
         </div>
       </div>

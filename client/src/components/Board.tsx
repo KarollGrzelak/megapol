@@ -1,10 +1,22 @@
-import { BOARD, GROUP_COLORS } from '../../../shared/board'
-import { gridPos } from '../../../shared/rules'
+import { useState, useCallback, useRef } from 'react'
+import { BOARD, GROUP_COLORS, GROUP_NAMES } from '../../../shared/board'
+import { gridPos, calcRent, ownsWholeGroup } from '../../../shared/rules'
 import type { GameState, Player } from '../../../shared/types'
 
 const DICE_FACES: Record<number, string> = { 1: '⚀', 2: '⚁', 3: '⚂', 4: '⚃', 5: '⚄', 6: '⚅' }
 
-function TileView({ id, state }: { id: number; state: GameState }) {
+interface TooltipData {
+  x: number
+  y: number
+  tile: typeof BOARD[number]
+  state: GameState
+}
+
+function TileView({ id, state, onHover }: {
+  id: number
+  state: GameState
+  onHover: (data: TooltipData | null, e: React.MouseEvent) => void
+}) {
   const tile = BOARD[id]
   const prop = state.properties[id]
   const owner = prop?.owner ? state.players.find((p) => p.id === prop.owner) : null
@@ -16,6 +28,9 @@ function TileView({ id, state }: { id: number; state: GameState }) {
     <div
       className={`tile ${isCorner ? 'corner' : ''} ${prop?.mortgaged ? 'mortgaged' : ''}`}
       style={{ gridRow: pos.row, gridColumn: pos.col }}
+      onMouseEnter={(e) => onHover({ x: e.clientX, y: e.clientY, tile, state }, e)}
+      onMouseMove={(e) => onHover({ x: e.clientX, y: e.clientY, tile, state }, e)}
+      onMouseLeave={() => onHover(null, null as any)}
     >
       {tile.group && (
         <div className="band" style={{ background: GROUP_COLORS[tile.group] }} />
@@ -44,9 +59,130 @@ function TileView({ id, state }: { id: number; state: GameState }) {
   )
 }
 
+function PropertyTooltip({ data }: { data: TooltipData }) {
+  const tile = data.tile
+  const state = data.state
+  const prop = state.properties[tile.id]
+  const owner = prop?.owner ? state.players.find((p) => p.id === prop.owner) : null
+
+  const isProperty = tile.type === 'street' || tile.type === 'railroad' || tile.type === 'utility'
+
+  return (
+    <div
+      className="tile-tooltip"
+      style={{ left: data.x + 15, top: data.y + 15 }}
+    >
+      <div className="tt-name" style={{ color: tile.group ? GROUP_COLORS[tile.group] : undefined }}>
+        {tile.name}
+      </div>
+      {tile.group && (
+        <div className="tt-group">{GROUP_NAMES[tile.group]}</div>
+      )}
+      {tile.price != null && (
+        <div className="tt-price">💰 {tile.price} zł</div>
+      )}
+      {owner && (
+        <div style={{ fontSize: '.8rem', color: 'var(--text2)', marginBottom: '.4rem' }}>
+          Właściciel: <span style={{ color: owner.color, fontWeight: 600 }}>{owner.name}</span>
+        </div>
+      )}
+      {isProperty && tile.rent && (
+        <div style={{ marginTop: '.4rem' }}>
+          <div className="tt-rent-row">
+            <span>Czynsz (pusty):</span>
+            <span>{tile.rent[0]} zł</span>
+          </div>
+          {tile.type === 'street' && (
+            <>
+              <div className="tt-rent-row">
+                <span>Monopol (×2):</span>
+                <span>{tile.rent[0] * 2} zł</span>
+              </div>
+              {[1, 2, 3, 4, 5].map((h) => (
+                <div key={h} className="tt-rent-row">
+                  <span>{h === 5 ? '🏨 Hotel' : `🏠 ${h} dom${h > 1 ? (h < 5 ? 'ki' : '') : 'ek'}`}:</span>
+                  <span>{tile.rent![h]} zł</span>
+                </div>
+              ))}
+            </>
+          )}
+          {tile.type === 'railroad' && (
+            <>
+              <div className="tt-rent-row"><span>1 dworzec:</span><span>25 zł</span></div>
+              <div className="tt-rent-row"><span>2 dworce:</span><span>50 zł</span></div>
+              <div className="tt-rent-row"><span>3 dworce:</span><span>100 zł</span></div>
+              <div className="tt-rent-row"><span>4 dworce:</span><span>200 zł</span></div>
+            </>
+          )}
+          {tile.type === 'utility' && (
+            <>
+              <div className="tt-rent-row"><span>1 utilisé:</span><span>4× Kość</span></div>
+              <div className="tt-rent-row"><span>2 użytki:</span><span>10× Kość</span></div>
+            </>
+          )}
+        </div>
+      )}
+      {tile.type === 'tax' && (
+        <div style={{ fontSize: '.85rem', color: 'var(--danger)', marginTop: '.3rem' }}>
+          💸 Podatek: {tile.taxAmount} zł
+        </div>
+      )}
+      {tile.type === 'chance' && (
+        <div style={{ fontSize: '.85rem', color: 'var(--secondary)', marginTop: '.3rem' }}>
+          ❓ Karta Szansa — podejmij decyzję!
+        </div>
+      )}
+      {tile.type === 'chest' && (
+        <div style={{ fontSize: '.85rem', color: 'var(--secondary)', marginTop: '.3rem' }}>
+          📋 Kasa Społeczna — podejmij decyzję!
+        </div>
+      )}
+      {tile.type === 'jail' && (
+        <div style={{ fontSize: '.85rem', color: 'var(--text2)', marginTop: '.3rem' }}>
+          🔒 Tylko odwiedzasz / Więzienie
+        </div>
+      )}
+      {tile.type === 'parking' && (
+        <div style={{ fontSize: '.85rem', color: 'var(--ok)', marginTop: '.3rem' }}>
+          🅿️ Darmowy Parking — nic się nie dzieje
+        </div>
+      )}
+      {tile.type === 'gotojail' && (
+        <div style={{ fontSize: '.85rem', color: 'var(--danger)', marginTop: '.3rem' }}>
+          🚔 Idź do więzienia!
+        </div>
+      )}
+      {prop?.mortgaged && (
+        <div style={{ fontSize: '.8rem', color: 'var(--text3)', marginTop: '.3rem', fontStyle: 'italic' }}>
+          🔒 Obciążone hipoteką
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Board({ state }: { state: GameState }) {
+  const [tooltip, setTooltip] = useState<TooltipData | null>(null)
   const cur = state.players[state.currentIdx]
   const dice = state.dice
+  const [isRolling, setIsRolling] = useState(false)
+  const prevDiceRef = useRef<string>('')
+
+  const handleHover = useCallback((data: TooltipData | null, e: React.MouseEvent) => {
+    if (data) {
+      setTooltip(data)
+    } else {
+      setTooltip(null)
+    }
+  }, [])
+
+  // Detect dice roll for animation
+  const diceKey = dice ? `${dice[0]}-${dice[1]}` : ''
+  if (diceKey && diceKey !== prevDiceRef.current) {
+    prevDiceRef.current = diceKey
+    setIsRolling(true)
+    setTimeout(() => setIsRolling(false), 500)
+  }
 
   let prompt = ''
   if (state.phase === 'finished' && state.winner) {
@@ -62,15 +198,19 @@ export default function Board({ state }: { state: GameState }) {
   return (
     <div className="board">
       {[...Array(40)].map((_, i) => (
-        <TileView key={i} id={i} state={state} />
+        <TileView key={i} id={i} state={state} onHover={handleHover} />
       ))}
       <div className="board-center">
         <div className="center-logo">MEGA<span>POL</span></div>
         <div className="dice-row">
           {dice ? (
             <>
-              <span key={dice[0]} className="die">{DICE_FACES[dice[0]]}</span>
-              <span key={dice[1]} className="die">{DICE_FACES[dice[1]]}</span>
+              <span key={`d1-${dice[0]}`} className={`die ${isRolling ? 'rolling' : ''}`}>
+                {DICE_FACES[dice[0]]}
+              </span>
+              <span key={`d2-${dice[1]}`} className={`die ${isRolling ? 'rolling' : ''}`}>
+                {DICE_FACES[dice[1]]}
+              </span>
             </>
           ) : (
             <span className="die idle">🎲</span>
@@ -78,6 +218,7 @@ export default function Board({ state }: { state: GameState }) {
         </div>
         <div className="prompt">{prompt}</div>
       </div>
+      {tooltip && <PropertyTooltip data={tooltip} />}
     </div>
   )
 }

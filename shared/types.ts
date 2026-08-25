@@ -63,6 +63,14 @@ export interface LogEntry {
   kind: 'info' | 'money' | 'card' | 'big'
 }
 
+export interface ChatMessage {
+  seq: number
+  playerId: string
+  playerName: string
+  text: string
+  timestamp: number
+}
+
 export interface LastCard {
   seq: number
   kind: 'chance' | 'chest'
@@ -83,6 +91,7 @@ export interface GameState {
   auction: Auction | null
   trade: TradeOffer | null
   log: LogEntry[]
+  chat: ChatMessage[]
   lastCard: LastCard | null
   winner: string | null
   startMoney: number
@@ -114,3 +123,4 @@ export type ClientAction =
   | { type: 'trade-accept' }
   | { type: 'trade-decline' }
   | { type: 'trade-cancel' }
+  | { type: 'chat'; text: string }
