@@ -1,7 +1,8 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { BOARD, GROUP_COLORS, GROUP_NAMES } from '../../../shared/board'
 import { gridPos, calcRent, ownsWholeGroup } from '../../../shared/rules'
 import type { GameState, Player } from '../../../shared/types'
+import { useGameAnimations, getInterpolatedPosition, calculatePath, type PawnAnimation } from '../animations'
 
 const DICE_FACES: Record<number, string> = { 1: '⚀', 2: '⚁', 3: '⚂', 4: '⚃', 5: '⚄', 6: '⚅' }
 
@@ -12,10 +13,62 @@ interface TooltipData {
   state: GameState
 }
 
-function TileView({ id, state, onHover }: {
+// ─── Animowany pionek ──────────────────────────────────────────────────────
+
+function AnimatedToken({
+  player,
+  animation,
+  isCurrentTurn,
+  now
+}: {
+  player: Player
+  animation: PawnAnimation | undefined
+  isCurrentTurn: boolean
+  now: number
+}) {
+  if (animation) {
+    const { pos } = getInterpolatedPosition(animation, now)
+    const gridPosNow = gridPos(pos)
+    return (
+      <span
+        className={`token ${isCurrentTurn ? 'active' : ''} animating`}
+        title={player.name}
+        style={{
+          borderColor: player.color,
+          gridRow: gridPosNow.row,
+          gridColumn: gridPosNow.col,
+          transition: 'none'
+        }}
+      >
+        {player.token}
+      </span>
+    )
+  }
+
+  const pos = gridPos(player.position)
+  return (
+    <span
+      className={`token ${isCurrentTurn ? 'active' : ''}`}
+      title={player.name}
+      style={{
+        borderColor: player.color,
+        gridRow: pos.row,
+        gridColumn: pos.col
+      }}
+    >
+      {player.token}
+    </span>
+  )
+}
+
+// ─── Widok pola ────────────────────────────────────────────────────────────
+
+function TileView({ id, state, onHover, landedTile, landedAt }: {
   id: number
   state: GameState
   onHover: (data: TooltipData | null, e: React.MouseEvent) => void
+  landedTile: number | null
+  landedAt: number
 }) {
   const tile = BOARD[id]
   const prop = state.properties[id]
@@ -23,10 +76,11 @@ function TileView({ id, state, onHover }: {
   const pos = gridPos(id)
   const here = state.players.filter((p) => !p.bankrupt && p.position === id)
   const isCorner = [0, 10, 20, 30].includes(id)
+  const isLanded = landedTile === id && (Date.now() - landedAt) < 1500
 
   return (
     <div
-      className={`tile ${isCorner ? 'corner' : ''} ${prop?.mortgaged ? 'mortgaged' : ''}`}
+      className={`tile ${isCorner ? 'corner' : ''} ${prop?.mortgaged ? 'mortgaged' : ''} ${isLanded ? 'landed' : ''}`}
       style={{ gridRow: pos.row, gridColumn: pos.col }}
       onMouseEnter={(e) => onHover({ x: e.clientX, y: e.clientY, tile, state }, e)}
       onMouseMove={(e) => onHover({ x: e.clientX, y: e.clientY, tile, state }, e)}
@@ -46,18 +100,12 @@ function TileView({ id, state, onHover }: {
       {owner && (
         <div className="owner-dot" style={{ background: owner.color }} />
       )}
-      <div className="tokens">
-        {here.map((p) => (
-          <span key={p.id} className={`token ${state.players[state.currentIdx]?.id === p.id ? 'active' : ''}`}
-            title={p.name}
-            style={{ borderColor: p.color }}>
-            {p.token}
-          </span>
-        ))}
-      </div>
+      {/* Tokeny renderedowane na poziomie board, nie w tile */}
     </div>
   )
 }
+
+// ─── Tooltip nieruchomości ──────────────────────────────────────────────────
 
 function PropertyTooltip({ data }: { data: TooltipData }) {
   const tile = data.tile
@@ -70,7 +118,7 @@ function PropertyTooltip({ data }: { data: TooltipData }) {
   return (
     <div
       className="tile-tooltip"
-      style={{ left: data.x + 15, top: data.y + 15 }}
+      style={{ left: Math.min(data.x + 15, window.innerWidth - 250), top: Math.min(data.y + 15, window.innerHeight - 300) }}
     >
       <div className="tt-name" style={{ color: tile.group ? GROUP_COLORS[tile.group] : undefined }}>
         {tile.name}
@@ -100,7 +148,7 @@ function PropertyTooltip({ data }: { data: TooltipData }) {
               </div>
               {[1, 2, 3, 4, 5].map((h) => (
                 <div key={h} className="tt-rent-row">
-                  <span>{h === 5 ? '🏨 Hotel' : `🏠 ${h} dom${h > 1 ? (h < 5 ? 'ki' : '') : 'ek'}`}:</span>
+                  <span>{h === 5 ? '🏨 Hotel' : `🏠 ${h} dom`}</span>
                   <span>{tile.rent![h]} zł</span>
                 </div>
               ))}
@@ -116,7 +164,7 @@ function PropertyTooltip({ data }: { data: TooltipData }) {
           )}
           {tile.type === 'utility' && (
             <>
-              <div className="tt-rent-row"><span>1 utilisé:</span><span>4× Kość</span></div>
+              <div className="tt-rent-row"><span>1 utilise:</span><span>4× Kość</span></div>
               <div className="tt-rent-row"><span>2 użytki:</span><span>10× Kość</span></div>
             </>
           )}
@@ -125,31 +173,6 @@ function PropertyTooltip({ data }: { data: TooltipData }) {
       {tile.type === 'tax' && (
         <div style={{ fontSize: '.85rem', color: 'var(--danger)', marginTop: '.3rem' }}>
           💸 Podatek: {tile.taxAmount} zł
-        </div>
-      )}
-      {tile.type === 'chance' && (
-        <div style={{ fontSize: '.85rem', color: 'var(--secondary)', marginTop: '.3rem' }}>
-          ❓ Karta Szansa — podejmij decyzję!
-        </div>
-      )}
-      {tile.type === 'chest' && (
-        <div style={{ fontSize: '.85rem', color: 'var(--secondary)', marginTop: '.3rem' }}>
-          📋 Kasa Społeczna — podejmij decyzję!
-        </div>
-      )}
-      {tile.type === 'jail' && (
-        <div style={{ fontSize: '.85rem', color: 'var(--text2)', marginTop: '.3rem' }}>
-          🔒 Tylko odwiedzasz / Więzienie
-        </div>
-      )}
-      {tile.type === 'parking' && (
-        <div style={{ fontSize: '.85rem', color: 'var(--ok)', marginTop: '.3rem' }}>
-          🅿️ Darmowy Parking — nic się nie dzieje
-        </div>
-      )}
-      {tile.type === 'gotojail' && (
-        <div style={{ fontSize: '.85rem', color: 'var(--danger)', marginTop: '.3rem' }}>
-          🚔 Idź do więzienia!
         </div>
       )}
       {prop?.mortgaged && (
@@ -161,28 +184,146 @@ function PropertyTooltip({ data }: { data: TooltipData }) {
   )
 }
 
+// ─── Efekt GO bonus ────────────────────────────────────────────────────────
+
+function GoBonusEffect({ show }: { show: boolean }) {
+  if (!show) return null
+  return (
+    <div className="go-bonus-effect">
+      <span>+200 zł</span>
+    </div>
+  )
+}
+
+// ─── Efekt płatności ───────────────────────────────────────────────────────
+
+function PaymentEffect({ from, to, amount, players }: {
+  from: string
+  to: string
+  amount: number
+  players: Player[]
+}) {
+  const fromPlayer = players.find(p => p.id === from)
+  const toPlayer = players.find(p => p.id === to)
+  return (
+    <div className="payment-effect">
+      <span className="payment-from" style={{ color: fromPlayer?.color }}>
+        {fromPlayer?.name}
+      </span>
+      <span className="payment-arrow">→</span>
+      <span className="payment-amount">-{amount} zł</span>
+      <span className="payment-arrow">→</span>
+      <span className="payment-to" style={{ color: toPlayer?.color }}>
+        {toPlayer?.name}
+      </span>
+    </div>
+  )
+}
+
+// ─── Główny komponent Board ─────────────────────────────────────────────────
+
 export default function Board({ state }: { state: GameState }) {
   const [tooltip, setTooltip] = useState<TooltipData | null>(null)
   const cur = state.players[state.currentIdx]
   const dice = state.dice
+  const {
+    animations,
+    checkPawnMovement,
+    startDiceRoll,
+    showGoBonusEffect,
+    showPaymentEffect
+  } = useGameAnimations()
+
+  const [now, setNow] = useState(Date.now())
+  const [rollingStep, setRollingStep] = useState(0)
   const [isRolling, setIsRolling] = useState(false)
   const prevDiceRef = useRef<string>('')
+  const prevLogLenRef = useRef(state.log.length)
+  const prevPositionsRef = useRef<Map<string, number>>(new Map())
 
-  const handleHover = useCallback((data: TooltipData | null, e: React.MouseEvent) => {
-    if (data) {
-      setTooltip(data)
-    } else {
-      setTooltip(null)
+  // Animacja pętli dla płynnych ruchów
+  useEffect(() => {
+    let frame: number
+    const tick = () => {
+      setNow(Date.now())
+      frame = requestAnimationFrame(tick)
     }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
   }, [])
 
-  // Detect dice roll for animation
-  const diceKey = dice ? `${dice[0]}-${dice[1]}` : ''
-  if (diceKey && diceKey !== prevDiceRef.current) {
-    prevDiceRef.current = diceKey
-    setIsRolling(true)
-    setTimeout(() => setIsRolling(false), 500)
-  }
+  // Wykryj zmianę pozycji graczy
+  useEffect(() => {
+    checkPawnMovement(state.players)
+  }, [state.players.map(p => `${p.id}:${p.position}`).join(','), checkPawnMovement])
+
+  // Animacja kości
+  useEffect(() => {
+    const diceKey = dice ? `${dice[0]}-${dice[1]}` : ''
+    if (diceKey && diceKey !== prevDiceRef.current) {
+      prevDiceRef.current = diceKey
+      setIsRolling(true)
+      setRollingStep(0)
+      startDiceRoll()
+
+      // Animacja przeskakiwania liczb
+      const interval = setInterval(() => {
+        setRollingStep(prev => prev + 1)
+      }, 80)
+
+      setTimeout(() => {
+        setIsRolling(false)
+        clearInterval(interval)
+      }, 800)
+    }
+  }, [dice, startDiceRoll])
+
+  // Wykryj efekty z logów
+  useEffect(() => {
+    if (state.log.length > prevLogLenRef.current) {
+      const lastLog = state.log[state.log.length - 1]
+      if (lastLog.text.includes('przechodzi przez START')) {
+        showGoBonusEffect()
+      }
+      if (lastLog.text.includes('płaci') && lastLog.text.includes('czynszu')) {
+        // Wyciągnij dane z loga
+        const match = lastLog.text.match(/(\w+) płaci (\d+) czynszu graczowi (\w+)/)
+        if (match) {
+          const fromPlayer = state.players.find(p => p.name === match[1])
+          const toPlayer = state.players.find(p => p.name === match[3])
+          if (fromPlayer && toPlayer) {
+            showPaymentEffect(fromPlayer.id, toPlayer.id, parseInt(match[2]))
+          }
+        }
+      }
+    }
+    prevLogLenRef.current = state.log.length
+  }, [state.log.length, state.log, state.players, showGoBonusEffect, showPaymentEffect])
+
+  const handleHover = useCallback((data: TooltipData | null, e: React.MouseEvent) => {
+    setTooltip(data)
+  }, [])
+
+  // Pobierz animowaną pozycję pionka
+  const getTokenPosition = useCallback((player: Player) => {
+    const anim = animations.pawns.get(player.id)
+    if (anim) {
+      return getInterpolatedPosition(anim, now)
+    }
+    return { pos: player.position, progress: 1, stepIdx: 0 }
+  }, [animations.pawns, now])
+
+  // Wygeneruj losowe kości podczas animacji
+  const displayDice = useMemo(() => {
+    if (!dice) return null
+    if (isRolling) {
+      return [
+        1 + Math.floor(Math.random() * 6),
+        1 + Math.floor(Math.random() * 6)
+      ] as [number, number]
+    }
+    return dice
+  }, [dice, isRolling, rollingStep])
 
   let prompt = ''
   if (state.phase === 'finished' && state.winner) {
@@ -197,27 +338,79 @@ export default function Board({ state }: { state: GameState }) {
 
   return (
     <div className="board">
+      {/* Pola planszy */}
       {[...Array(40)].map((_, i) => (
-        <TileView key={i} id={i} state={state} onHover={handleHover} />
+        <TileView
+          key={i}
+          id={i}
+          state={state}
+          onHover={handleHover}
+          landedTile={animations.landedTile}
+          landedAt={animations.landedAt}
+        />
       ))}
+
+      {/* Animowane pionki */}
+      {state.players.filter(p => !p.bankrupt).map(player => {
+        const { pos } = getTokenPosition(player)
+        const gridPosNow = gridPos(pos)
+        const anim = animations.pawns.get(player.id)
+        const isMoving = !!anim
+        const isCurrentTurn = state.players[state.currentIdx]?.id === player.id
+
+        return (
+          <div
+            key={player.id}
+            className={`board-token ${isCurrentTurn ? 'active' : ''} ${isMoving ? 'moving' : ''}`}
+            style={{
+              gridRow: gridPosNow.row,
+              gridColumn: gridPosNow.col,
+              '--token-color': player.color,
+              zIndex: isCurrentTurn ? 20 : 10
+            } as React.CSSProperties}
+            title={player.name}
+          >
+            {player.token}
+          </div>
+        )
+      })}
+
+      {/* Centrum planszy */}
       <div className="board-center">
         <div className="center-logo">MEGA<span>POL</span></div>
+
+        {/* Kości */}
         <div className="dice-row">
-          {dice ? (
+          {displayDice ? (
             <>
-              <span key={`d1-${dice[0]}`} className={`die ${isRolling ? 'rolling' : ''}`}>
-                {DICE_FACES[dice[0]]}
+              <span className={`die ${isRolling ? 'rolling' : ''} ${!isRolling && dice ? 'landed' : ''}`}>
+                {DICE_FACES[displayDice[0]]}
               </span>
-              <span key={`d2-${dice[1]}`} className={`die ${isRolling ? 'rolling' : ''}`}>
-                {DICE_FACES[dice[1]]}
+              <span className={`die ${isRolling ? 'rolling' : ''} ${!isRolling && dice ? 'landed' : ''}`}>
+                {DICE_FACES[displayDice[1]]}
               </span>
             </>
           ) : (
             <span className="die idle">🎲</span>
           )}
         </div>
+
         <div className="prompt">{prompt}</div>
       </div>
+
+      {/* Efekty */}
+      <GoBonusEffect show={animations.showGoBonus} />
+
+      {animations.showPayEffect && (
+        <PaymentEffect
+          from={animations.showPayEffect.from}
+          to={animations.showPayEffect.to}
+          amount={animations.showPayEffect.amount}
+          players={state.players}
+        />
+      )}
+
+      {/* Tooltip */}
       {tooltip && <PropertyTooltip data={tooltip} />}
     </div>
   )

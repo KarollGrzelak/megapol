@@ -56,7 +56,20 @@ body {
 
 @keyframes pulse {
   0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.05); }
+  50% { transform: scale(1.08); }
+}
+
+@keyframes tokenPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 3px var(--accent), 0 0 15px rgba(255,77,109,.5); }
+  50% { transform: scale(1.12); box-shadow: 0 0 0 5px var(--accent), 0 0 25px rgba(255,77,109,.7); }
+}
+
+@keyframes tokenBounce {
+  0% { transform: scale(1) translateY(0); }
+  30% { transform: scale(1.2) translateY(-8px); }
+  50% { transform: scale(0.9) translateY(2px); }
+  70% { transform: scale(1.05) translateY(-3px); }
+  100% { transform: scale(1) translateY(0); }
 }
 
 @keyframes glow {
@@ -77,10 +90,10 @@ body {
 }
 
 @keyframes rollDice {
-  0% { transform: rotate(0deg) scale(1); }
-  25% { transform: rotate(90deg) scale(1.1); }
-  50% { transform: rotate(180deg) scale(1); }
-  75% { transform: rotate(270deg) scale(1.1); }
+  0% { transform: rotate(0deg) scale(1.1); }
+  25% { transform: rotate(120deg) scale(0.9); }
+  50% { transform: rotate(240deg) scale(1.15); }
+  75% { transform: rotate(300deg) scale(0.95); }
   100% { transform: rotate(360deg) scale(1); }
 }
 
@@ -550,8 +563,62 @@ select.input { cursor: pointer; }
 }
 
 .token.active {
-  animation: pulse 1s infinite;
-  box-shadow: 0 0 0 3px var(--accent), 0 2px 8px rgba(255,77,109,.4);
+  animation: tokenPulse 1.2s ease-in-out infinite;
+  box-shadow: 0 0 0 3px var(--accent), 0 0 15px rgba(255,77,109,.5);
+}
+
+/* ─── BOARD TOKENS (POWN ANIMATION) ──────────────────────────────────── */
+
+.board-token {
+  position: absolute;
+  font-size: clamp(9px, 1.5vw, 16px);
+  border: 2.5px solid var(--token-color, #fff);
+  border-radius: 50%;
+  width: clamp(14px, 2.8vw, 28px);
+  height: clamp(14px, 2.8vw, 28px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,.95);
+  line-height: 1;
+  box-shadow: 0 3px 8px rgba(0,0,0,.3);
+  transition: grid-row .35s cubic-bezier(.25,.8,.25,1), grid-column .35s cubic-bezier(.25,.8,.25,1);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.board-token.active {
+  z-index: 20;
+  animation: tokenPulse 1.2s ease-in-out infinite;
+  box-shadow: 0 0 0 3px var(--accent), 0 0 15px rgba(255,77,109,.5);
+}
+
+.board-token.moving {
+  transition: grid-row .2s linear, grid-column .2s linear;
+  animation: tokenBounce .3s ease-in-out;
+  z-index: 30;
+}
+
+/* Lądowanie na polu - flash */
+.tile.landed {
+  animation: tileLand .6s ease-out;
+}
+
+@keyframes tileLand {
+  0% { box-shadow: inset 0 0 0 0 rgba(255,77,109,0); }
+  30% { box-shadow: inset 0 0 20px 5px rgba(255,77,109,.4); }
+  100% { box-shadow: inset 0 0 0 0 rgba(255,77,109,0); }
+}
+
+/* Kość ląduje */
+.die.landed {
+  animation: dieLand .4s cubic-bezier(.25,.8,.25,1);
+}
+
+@keyframes dieLand {
+  0% { transform: scale(1.3) rotate(10deg); }
+  50% { transform: scale(0.9) rotate(-5deg); }
+  100% { transform: scale(1) rotate(0deg); }
 }
 
 .token.small {
@@ -610,11 +677,14 @@ select.input { cursor: pointer; }
   align-items: center;
   justify-content: center;
   box-shadow: 0 4px 12px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.8);
-  transition: var(--transition);
+  transition: transform .2s cubic-bezier(.25,.8,.25,1), box-shadow .2s ease;
 }
 
 .die.rolling {
-  animation: rollDice .5s ease-in-out;
+  animation: rollDice .12s ease-in-out infinite;
+  background: linear-gradient(145deg, #fff 0%, #e8e8e8 100%);
+  box-shadow: 0 6px 20px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.9);
+  transform: scale(1.1);
 }
 
 .die.idle {
@@ -1126,4 +1196,84 @@ select.input { cursor: pointer; }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text3);
+}
+
+/* ─── GO BONUS EFFECT ─────────────────────────────────────────────────── */
+
+.go-bonus-effect {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  pointer-events: none;
+  animation: goBonus 2s ease-out forwards;
+}
+
+.go-bonus-effect span {
+  font-size: clamp(1.5rem, 4vw, 3rem);
+  font-weight: 900;
+  color: var(--ok);
+  text-shadow: 0 0 20px rgba(46,196,182,.8), 0 2px 4px rgba(0,0,0,.5);
+  background: linear-gradient(135deg, var(--ok) 0%, var(--ok2) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+@keyframes goBonus {
+  0% { opacity: 0; transform: translate(-50%, -30%) scale(0.5); }
+  20% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
+  40% { transform: translate(-50%, -50%) scale(1); }
+  80% { opacity: 1; transform: translate(-50%, -70%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -100%) scale(0.8); }
+}
+
+/* ─── PAYMENT EFFECT ─────────────────────────────────────────────────── */
+
+.payment-effect {
+  position: absolute;
+  bottom: 15%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .6rem 1.2rem;
+  background: rgba(15,15,26,.9);
+  border-radius: var(--radius);
+  border: 1px solid rgba(255,77,109,.3);
+  box-shadow: 0 4px 20px rgba(0,0,0,.5);
+  animation: paymentSlide 2.5s ease-out forwards;
+  white-space: nowrap;
+}
+
+.payment-from {
+  font-weight: 700;
+  font-size: .9rem;
+}
+
+.payment-to {
+  font-weight: 700;
+  font-size: .9rem;
+}
+
+.payment-amount {
+  font-weight: 900;
+  font-size: 1.1rem;
+  color: var(--danger);
+}
+
+.payment-arrow {
+  color: var(--text3);
+  font-size: .8rem;
+}
+
+@keyframes paymentSlide {
+  0% { opacity: 0; transform: translateX(-50%) translateY(20px); }
+  15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  80% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
 }
