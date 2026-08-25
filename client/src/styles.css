@@ -1545,3 +1545,61 @@ select.input { cursor: pointer; }
   color: var(--ok);
   font-weight: 600;
 }
+
+/* ─── RECONNECT OVERLAY ──────────────────────────────────────────────── */
+
+.reconnect-card {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.reconnect-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid var(--card3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── LOBBY HEADER ──────────────────────────────────────────────────── */
+
+.lobby-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+}
+
+.offline-badge {
+  font-size: .75rem;
+  color: var(--danger);
+  background: rgba(239,71,111,.15);
+  padding: .2rem .6rem;
+  border-radius: 12px;
+  border: 1px solid rgba(239,71,111,.2);
+}
+
+.lobby-buttons {
+  display: flex;
+  gap: .5rem;
+  justify-content: center;
+  margin-bottom: .5rem;
+}
+
+.leave-btn {
+  margin-top: 1rem;
+  width: 100%;
+  opacity: .6;
+}
+
+.leave-btn:hover {
+  opacity: 1;
+}

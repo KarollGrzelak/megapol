@@ -49,6 +49,10 @@ const rooms = new Map<string, Room>()
 const socketsByPlayer = new Map<string, Socket>()
 // socket.id -> playerId
 let playerOfSocket = new Map<string, string>()
+// playerId -> timeout dyskonect (grace period)
+const disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+const DISCONNECT_GRACE_MS = 10000 // 10 sekund na reconnect
 
 function genRoomCode(): string {
   const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
@@ -179,28 +183,85 @@ io.on('connection', (socket) => {
   })
 
   socket.on('leave-room', () => {
-    handleLeave(socket)
+    // Oczyść zapisany pokój po stronie klienta
+    const pid = socket.data.playerId as string | undefined
+    if (pid) {
+      // Usuń z pokoi bez grace period
+      for (const room of rooms.values()) {
+        if (!room.players.has(pid)) continue
+        if (!room.game) {
+          room.players.delete(pid)
+          if (room.hostId === pid && room.players.size > 0) {
+            room.hostId = [...room.players.keys()][0]
+          }
+          if (room.players.size === 0) rooms.delete(room.code)
+        } else {
+          room.game.setConnected(pid, false)
+        }
+        broadcast(room)
+      }
+    }
     socket.rooms.forEach((room) => socket.leave(room))
   })
 
-  socket.on('disconnect', () => handleLeave(socket))
+  socket.on('disconnect', () => handleDisconnect(socket))
 
-  function handleLeave(socket: Socket) {
+  function handleDisconnect(socket: Socket) {
     const pid = socket.data.playerId as string | undefined
     if (!pid) return
+
+    // Jeśli gracz ma pokój w trakcie gry — grace period
+    let inActiveGame = false
     for (const room of rooms.values()) {
-      if (!room.players.has(pid)) continue
-      if (!room.game) {
+      if (room.players.has(pid) && room.game) {
+        inActiveGame = true
+        break
+      }
+    }
+
+    if (inActiveGame) {
+      // Daj 10 sekund na reconnect przed oznaczeniem jako offline
+      const existingTimer = disconnectTimers.get(pid)
+      if (existingTimer) clearTimeout(existingTimer)
+
+      // Od razu oznacz jako offline wizualnie
+      for (const room of rooms.values()) {
+        if (room.players.has(pid) && room.game) {
+          room.game.setConnected(pid, false)
+          broadcast(room)
+        }
+      }
+
+      // Timer na pełne usunięcie
+      const timer = setTimeout(() => {
+        disconnectTimers.delete(pid)
+        // Gracz nie wrócił — usuń z pokoi
+        for (const room of rooms.values()) {
+          if (!room.players.has(pid)) continue
+          if (!room.game) {
+            room.players.delete(pid)
+            if (room.hostId === pid && room.players.size > 0) {
+              room.hostId = [...room.players.keys()][0]
+            }
+            if (room.players.size === 0) rooms.delete(room.code)
+          }
+        }
+        socketsByPlayer.delete(pid)
+      }, DISCONNECT_GRACE_MS)
+
+      disconnectTimers.set(pid, timer)
+    } else {
+      // Lobby — usuń od razu
+      for (const room of rooms.values()) {
+        if (!room.players.has(pid)) continue
         room.players.delete(pid)
         if (room.hostId === pid && room.players.size > 0) {
           room.hostId = [...room.players.keys()][0]
         }
         if (room.players.size === 0) rooms.delete(room.code)
-      } else {
-        room.game.setConnected(pid, false)
       }
-      broadcast(room)
     }
+
     socketsByPlayer.delete(pid)
     playerOfSocket.delete(socket.id)
   }
@@ -209,6 +270,13 @@ io.on('connection', (socket) => {
     socket.data.playerId = playerId
     socketsByPlayer.set(playerId, socket)
     playerOfSocket.set(socket.id, playerId)
+
+    // Anuluj timer disconnect jeśli istnieje (reconnect!)
+    const existingTimer = disconnectTimers.get(playerId)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+      disconnectTimers.delete(playerId)
+    }
   }
 
   function emitError(socket: Socket, message: string) {
