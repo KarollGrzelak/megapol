@@ -130,7 +130,7 @@ export interface GameState {
 export interface RoomView {
   code: string
   hostId: string
-  players: { id: string; name: string; connected: boolean }[]
+  players: { id: string; name: string; token?: string; color?: string; connected: boolean }[]
   settings: { startMoney: number; freeParking: boolean; auctionEnabled: boolean; goSalary: number }
   started: boolean
   game: GameState | null

@@ -14,6 +14,8 @@ const PORT = Number(process.env.PORT || 3001)
 interface RoomPlayer {
   id: string
   name: string
+  token?: string   // wybrany pionek
+  color?: string   // wybrany kolor
 }
 
 class Room {
@@ -33,7 +35,7 @@ class Room {
       code: this.code,
       hostId: this.hostId,
       players: [...this.players.values()].map((p) => ({
-        id: p.id, name: p.name,
+        id: p.id, name: p.name, token: p.token, color: p.color,
         connected: this.game?.state.players.find((gp) => gp.id === p.id)?.connected ?? true
       })),
       settings: this.settings,
@@ -148,12 +150,27 @@ io.on('connection', (socket) => {
     broadcast(room)
   })
 
+  socket.on('room:select-token', ({ code, token, color }: { code: string; token: string; color: string }) => {
+    const room = rooms.get(String(code || '').toUpperCase())
+    const pid = socket.data.playerId as string | undefined
+    if (!room || !pid) return
+    if (room.game) return // nie w trakcie gry
+    const player = room.players.get(pid)
+    if (!player) return
+    // Walidacja - sprawdź czy pionek/kolor nie jest zajęty
+    const takenTokens = [...room.players.values()].filter(p => p.id !== pid).map(p => p.token)
+    const takenColors = [...room.players.values()].filter(p => p.id !== pid).map(p => p.color)
+    if (token && !takenTokens.includes(token)) player.token = token
+    if (color && !takenColors.includes(color)) player.color = color
+    broadcast(room)
+  })
+
   socket.on('game:start', ({ code }: { code: string }) => {
     const room = rooms.get(String(code || '').toUpperCase())
     if (!room || room.game || socket.data.playerId !== room?.hostId) return
     try {
       const game = new Game(room.settings)
-      for (const p of room.players.values()) game.addPlayer(p.id, p.name)
+      for (const p of room.players.values()) game.addPlayer(p.id, p.name, p.token, p.color)
       game.start()
       room.game = game
       broadcast(room)

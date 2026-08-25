@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { socket, getPlayerId, saveRoomCode, getSavedRoomCode, clearRoomCode } from './socket'
+import { AVAILABLE_TOKENS, AVAILABLE_COLORS } from '../../shared/tokens'
 import type { RoomView } from '../../shared/types'
 import GameScreen from './components/GameScreen'
 import { ToastProvider, useToast } from './components/Toast'
@@ -144,18 +145,33 @@ function AppInner() {
     return () => { socket.off('error-msg', onError) }
   }, [addToast])
 
+  const [selectedToken, setSelectedToken] = useState(() => localStorage.getItem('megapol-token') || '')
+  const [selectedColor, setSelectedColor] = useState(() => localStorage.getItem('megapol-color') || '')
+
   const saveName = useCallback(() => {
     localStorage.setItem('megapol-name', name.trim())
     return name.trim() || 'Gracz'
   }, [name])
 
   const create = () => {
-    socket.emit('room:create', { name: saveName(), playerId: myId })
+    const playerName = saveName()
+    if (selectedToken) localStorage.setItem('megapol-token', selectedToken)
+    if (selectedColor) localStorage.setItem('megapol-color', selectedColor)
+    socket.emit('room:create', { name: playerName, playerId: myId })
+    // Po utworzeniu pokoju ustaw token/kolor
+    setTimeout(() => {
+      if (selectedToken || selectedColor) {
+        // Poczekaj na state z kodem pokoju
+      }
+    }, 100)
   }
 
   const join = () => {
     if (!joinCode.trim()) return
-    socket.emit('room:join', { code: joinCode.trim().toUpperCase(), name: saveName(), playerId: myId })
+    const playerName = saveName()
+    if (selectedToken) localStorage.setItem('megapol-token', selectedToken)
+    if (selectedColor) localStorage.setItem('megapol-color', selectedColor)
+    socket.emit('room:join', { code: joinCode.trim().toUpperCase(), name: playerName, playerId: myId })
   }
 
   const leaveRoom = () => {
@@ -217,6 +233,36 @@ function AppInner() {
             maxLength={16}
             onChange={(e) => setName(e.target.value)}
           />
+          
+          {/* Wybór pionka */}
+          <label className="label">Wybierz pionka</label>
+          <div className="token-selector">
+            {AVAILABLE_TOKENS.map((t) => (
+              <button
+                key={t.emoji}
+                className={`token-option ${selectedToken === t.emoji ? 'selected' : ''}`}
+                onClick={() => setSelectedToken(t.emoji)}
+                title={t.name}
+              >
+                {t.emoji}
+              </button>
+            ))}
+          </div>
+
+          {/* Wybór koloru */}
+          <label className="label">Wybierz kolor</label>
+          <div className="color-selector">
+            {AVAILABLE_COLORS.map((c) => (
+              <button
+                key={c.hex}
+                className={`color-option ${selectedColor === c.hex ? 'selected' : ''}`}
+                style={{ background: c.hex }}
+                onClick={() => setSelectedColor(c.hex)}
+                title={c.name}
+              />
+            ))}
+          </div>
+
           <button className="btn primary big" onClick={create}>Stwórz pokój</button>
           <div className="divider">lub</div>
           <div className="row">
@@ -276,14 +322,60 @@ function AppInner() {
               📤 Udostępnij
             </button>
           </div>
-          <div className="player-chips">
+          <div className="player-chips lobby-players">
             {room.players.map((p) => (
-              <span key={p.id} className={`chip ${p.connected ? '' : 'off'}`}>
-                {p.name}{p.id === room.hostId ? ' 👑' : ''}
-                {!p.connected && ' (offline)'}
-              </span>
+              <div key={p.id} className={`lobby-player ${p.connected ? '' : 'off'} ${p.id === myId ? 'me' : ''}`}>
+                <span className="lobby-player-token" style={{ borderColor: p.color || '#888' }}>
+                  {p.token || '🎲'}
+                </span>
+                <span className="lobby-player-name">
+                  {p.name}{p.id === room.hostId ? ' 👑' : ''}
+                </span>
+                {!p.connected && <span className="offline-tag">offline</span>}
+              </div>
             ))}
           </div>
+
+          {/* Wybór pionka dla bieżącego gracza */}
+          {(() => {
+            const myPlayer = room.players.find(p => p.id === myId)
+            if (!myPlayer) return null
+            return (
+              <div className="my-token-select">
+                <label className="label">Twój pionek</label>
+                <div className="token-selector small">
+                  {AVAILABLE_TOKENS.map((t) => (
+                    <button
+                      key={t.emoji}
+                      className={`token-option ${(myPlayer.token || selectedToken) === t.emoji ? 'selected' : ''}`}
+                      onClick={() => {
+                        setSelectedToken(t.emoji)
+                        socket.emit('room:select-token', { code: room.code, token: t.emoji, color: '' })
+                      }}
+                      title={t.name}
+                    >
+                      {t.emoji}
+                    </button>
+                  ))}
+                </div>
+                <label className="label">Twój kolor</label>
+                <div className="color-selector small">
+                  {AVAILABLE_COLORS.map((c) => (
+                    <button
+                      key={c.hex}
+                      className={`color-option ${(myPlayer.color || selectedColor) === c.hex ? 'selected' : ''}`}
+                      style={{ background: c.hex }}
+                      onClick={() => {
+                        setSelectedColor(c.hex)
+                        socket.emit('room:select-token', { code: room.code, token: '', color: c.hex })
+                      }}
+                      title={c.name}
+                    />
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
           {isHost && (
             <>
               <div className="lobby-settings">

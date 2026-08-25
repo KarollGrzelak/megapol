@@ -139,13 +139,13 @@ export class Game {
     return true
   }
 
-  addPlayer(id: string, name: string) {
+  addPlayer(id: string, name: string, token?: string, color?: string) {
     const i = this.state.players.length
     if (i >= MAX_PLAYERS) throw new Error('Pokój jest pełny')
     this.state.players.push({
       id, name,
-      color: PLAYER_COLORS[i % PLAYER_COLORS.length],
-      token: TOKENS[i % TOKENS.length],
+      color: color || PLAYER_COLORS[i % PLAYER_COLORS.length],
+      token: token || TOKENS[i % TOKENS.length],
       money: this.state.startMoney,
       position: 0, inJail: false, jailTurns: 0, jailCards: 0,
       bankrupt: false, connected: true
